@@ -109,6 +109,14 @@ CREATE TABLE IF NOT EXISTS pending_rework (
     created_at BIGINT NOT NULL
 )
 """
+PENDING_DELETE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_delete (
+    user_id BIGINT PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    thread_id BIGINT,
+    created_at BIGINT NOT NULL
+)
+"""
 PENDING_TTL_SECONDS = 600  # сколько ждать сообщение после нажатия «Новый баг»
 
 STATUS_LABELS = {
@@ -535,6 +543,8 @@ async def on_new_feature(message: Message, conn: asyncpg.Connection):
         return
     if await try_rework_reason(message, conn):
         return
+    if await try_delete_reason(message, conn):
+        return
 
     pending = await conn.fetchrow(
         "SELECT * FROM pending_feature WHERE user_id = $1", message.from_user.id
@@ -612,6 +622,8 @@ async def on_name_query(message: Message, conn: asyncpg.Connection):
         return
     if await try_rework_reason(message, conn):
         return
+    if await try_delete_reason(message, conn):
+        return
     search = await conn.fetchrow(
         "SELECT * FROM pending_search WHERE user_id = $1", message.from_user.id
     )
@@ -638,18 +650,17 @@ async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
 
 
 @dp.message(F.chat.id == GROUP_ID, F.text == "🗑 Удалить баг")
-async def on_button_delete_hint(message: Message):
-    await message.reply("Чтобы удалить баг, отправьте /delbug и его номер, например: /delbug 5")
+async def on_button_delete_hint(message: Message, conn: asyncpg.Connection):
+    await conn.execute(
+        """INSERT INTO pending_delete (user_id, chat_id, thread_id, created_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (user_id) DO UPDATE SET chat_id = $2, thread_id = $3, created_at = $4""",
+        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
+    )
+    await message.reply("Напишите номер бага, который нужно удалить (например: 5).")
 
 
-@dp.message(Command("delbug"), F.chat.id == GROUP_ID)
-async def on_delete_bug(message: Message, conn: asyncpg.Connection):
-    parts = (message.text or "").split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.reply("Укажите номер бага: /delbug 5")
-        return
-
-    bug_id = int(parts[1])
+async def delete_bug(message: Message, conn: asyncpg.Connection, bug_id: int):
     bug = await conn.fetchrow("SELECT * FROM bugs WHERE id = $1", bug_id)
     if bug is None:
         await message.reply(f"Баг #{bug_id} не найден.")
@@ -666,6 +677,35 @@ async def on_delete_bug(message: Message, conn: asyncpg.Connection):
     await message.reply(f"Баг #{bug_id} удалён.")
 
 
+@dp.message(Command("delbug"), F.chat.id == GROUP_ID)
+async def on_delete_bug(message: Message, conn: asyncpg.Connection):
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.reply("Укажите номер бага: /delbug 5")
+        return
+    await delete_bug(message, conn, int(parts[1]))
+
+
+async def try_delete_reason(message: Message, conn: asyncpg.Connection) -> bool:
+    # если бот ждёт номер бага для удаления, текст — это номер
+    text = message.text
+    if not text or text.startswith("/"):
+        return False
+    pending = await conn.fetchrow("SELECT * FROM pending_delete WHERE user_id = $1", message.from_user.id)
+    if pending is None:
+        return False
+    await conn.execute("DELETE FROM pending_delete WHERE user_id = $1", message.from_user.id)
+    if int(time.time()) - pending["created_at"] > PENDING_TTL_SECONDS:
+        return True
+
+    number = text.strip().lstrip("#")
+    if not number.isdigit():
+        await message.reply("Нужен номер бага, например 5. Нажмите «🗑 Удалить баг» и напишите число.")
+        return True
+    await delete_bug(message, conn, int(number))
+    return True
+
+
 @dp.message(
     F.chat.id == GROUP_ID,
     F.message_thread_id == BUGS_THREAD_ID,
@@ -675,6 +715,8 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
     if message.text and message.text.startswith("/"):
         return
     if await try_rework_reason(message, conn):
+        return
+    if await try_delete_reason(message, conn):
         return
 
     # баг создаём только если этот пользователь недавно нажал «➕ Новый баг»
@@ -757,6 +799,7 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute(FEATURES_SCHEMA)
     await conn.execute(PENDING_FEATURE_SCHEMA)
     await conn.execute(PENDING_REWORK_SCHEMA)
+    await conn.execute(PENDING_DELETE_SCHEMA)
     await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS note TEXT")
     await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS note TEXT")
     await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS bot_msg_id BIGINT")

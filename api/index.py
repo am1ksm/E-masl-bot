@@ -33,7 +33,8 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROUP_ID = int(os.environ["GROUP_ID"])
 BUGS_THREAD_ID = int(os.environ["BUGS_THREAD_ID"])
 FEATURES_THREAD_ID = int(os.environ.get("FEATURES_THREAD_ID") or 0)
-RESULT_THREAD_ID = int(os.environ.get("RESULT_THREAD_ID") or REPORT_THREAD_ID)  # тема «Результат дня»
+RESULT_THREAD_ID = int(os.environ.get("RESULT_THREAD_ID") or REPORT_THREAD_ID)
+TESTED_THREAD_ID = int(os.environ.get("TESTED_THREAD_ID") or 0)  # тема для протестированного, 0 = выключено  # тема «Результат дня»
 RESULT_HOUR = 17  # с этого часа (по Алматы) отправляем «Результат дня» вместо напоминания  # тема «Функционал», 0 = выключено
 REPORT_THREAD_ID = int(os.environ.get("REPORT_THREAD_ID") or BUGS_THREAD_ID)
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -214,6 +215,19 @@ def feature_keyboard(feature_id: int, status: str):
         for a in ("accept", "work", "done")
     ]
     return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
+async def post_tested(bot: Bot, item, kind: str):
+    if not TESTED_THREAD_ID:
+        return
+    link = source_link(item)
+    await bot.send_message(
+        item["chat_id"],
+        f'🧪 <b>Протестировано: {kind} #{item["id"]}</b>\n'
+        f'{html.escape(item["title"])}\n'
+        f'<a href="{link}">Открыть исходное сообщение</a>',
+        message_thread_id=TESTED_THREAD_ID,
+    )
 
 
 def features_keyboard():
@@ -490,6 +504,8 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
+    if new_status == "tested":
+        await post_tested(cb.bot, feature, "функционал")
     await cb.answer(FEATURE_STATUS[new_status])
 
 
@@ -622,6 +638,8 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
+    if new_status == "tested":
+        await post_tested(cb.bot, bug, "баг")
     await cb.answer(STATUS_LABELS[new_status])
 
 

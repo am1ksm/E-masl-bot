@@ -232,7 +232,8 @@ async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
         message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
     )
     await message.reply(
-        "Отправьте скриншот или описание бага одним сообщением. Жду 10 минут."
+        "Отправляйте баги: скриншот или описание, по одному сообщению на баг. "
+        "Режим работает, пока вы отправляете баги, и выключится через 10 минут без новых."
     )
 
 
@@ -282,7 +283,11 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
         if pending is not None:
             await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
         return
-    await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
+    # режим «несколько багов»: ожидание продлевается после каждого созданного бага
+    await conn.execute(
+        "UPDATE pending_bug SET created_at = $1 WHERE user_id = $2",
+        int(time.time()), message.from_user.id,
+    )
 
     raw = (message.text or message.caption or "").strip()
     title = raw.splitlines()[0][:120] if raw else "Скриншот без описания"

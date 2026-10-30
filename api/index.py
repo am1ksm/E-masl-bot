@@ -178,9 +178,18 @@ FEATURE_STATUS = {
     "accepted": "✋ Принял",
     "working": "🔧 В процессе",
     "done": "✅ Сделал",
+    "tested": "🧪 Протестировал",
+    "shipped": "🚀 Залито",
 }
-FEATURE_BUTTONS = {"accept": "✋ Принял", "work": "🔧 В процессе", "done": "✅ Сделал"}
-FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done"}
+FEATURE_BUTTONS = {
+    "accept": "✋ Принял",
+    "work": "🔧 В процессе",
+    "done": "✅ Сделал",
+    "test": "🧪 Протестировал",
+    "ship": "🚀 Залито",
+}
+FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done", "test": "tested", "ship": "shipped"}
+FEATURE_NEXT_ACTIONS = {"done": "test", "tested": "ship"}
 
 
 def feature_card(f) -> str:
@@ -193,7 +202,12 @@ def feature_card(f) -> str:
 
 
 def feature_keyboard(feature_id: int, status: str):
-    if status == "done":
+    if status in FEATURE_NEXT_ACTIONS:
+        action = FEATURE_NEXT_ACTIONS[status]
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=FEATURE_BUTTONS[action], callback_data=f"feat:{feature_id}:{action}")
+        ]])
+    if status == "shipped":
         return None
     row = [
         InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
@@ -383,6 +397,8 @@ def build_features_list(rows) -> str:
         ("accepted", "✋ Приняты"),
         ("working", "🔧 В процессе"),
         ("done", "✅ Сделанные"),
+        ("tested", "🧪 Протестированные"),
+        ("shipped", "🚀 Залито"),
     ]
     lines = [f"💡 <b>Все функционалы ({len(rows)})</b>"]
     for key, title in sections:
@@ -449,8 +465,8 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
     if feature is None:
         await cb.answer("Функционал не найден", show_alert=True)
         return
-    if feature["status"] == "done":
-        await cb.answer("Уже сделано")
+    if feature["status"] in ("done", "tested", "shipped") and FEATURE_NEXT_ACTIONS.get(feature["status"]) != action:
+        await cb.answer("Уже закрыто")
         return
 
     name = user_name(cb.from_user)
@@ -700,7 +716,7 @@ async def handle_summary(headers: dict) -> int:
         )
         if now.hour >= RESULT_HOUR:
             done_features = await conn.fetch(
-                "SELECT * FROM features WHERE status = 'done' AND updated_at LIKE $1 ORDER BY id",
+                "SELECT * FROM features WHERE status IN ('done', 'tested', 'shipped') AND updated_at LIKE $1 ORDER BY id",
                 today_like,
             )
             await bot.send_message(

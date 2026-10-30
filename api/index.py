@@ -883,22 +883,27 @@ def build_day_result(bugs_done, features_done) -> str:
     today = datetime.now(TZ).strftime("%d.%m")
     lines = [f"🏁 <b>Результат дня ({today})</b>"]
     if not bugs_done and not features_done:
-        lines.append("\nЗа сегодня ничего не закрыто.")
+        lines.append("\nЗа сегодня ничего не менялось.")
         return "\n".join(lines)
 
-    status_names = [("done", "✅ Сделано"), ("tested", "🧪 Протестировано"), ("shipped", "🚀 Залито")]
-    for title, items in (("🐞 Баги", bugs_done), ("💡 Функционал", features_done)):
+    order = ["new", "accepted", "working", "done", "rework", "tested", "shipped"]
+    for title, items, labels in (
+        ("🐞 Баги", bugs_done, STATUS_LABELS),
+        ("💡 Функционал", features_done, FEATURE_STATUS),
+    ):
         if not items:
             continue
         counts = " · ".join(
-            f"{label} {sum(1 for i in items if i['status'] == key)}" for key, label in status_names
+            f"{labels[key]} {sum(1 for i in items if i['status'] == key)}"
+            for key in order
+            if any(i["status"] == key for i in items)
         )
         lines.append(f"\n<b>{title}</b>\n{counts}")
-        for key, label in status_names:
+        for key in order:
             group = [i for i in items if i["status"] == key]
             if not group:
                 continue
-            lines.append(f"\n<b>{label} ({len(group)})</b>")
+            lines.append(f"\n<b>{labels[key]} ({len(group)})</b>")
             for i in group:
                 who = f" — {html.escape(i['assignee'])}" if i["assignee"] else ""
                 lines.append(
@@ -918,12 +923,12 @@ async def handle_summary(headers: dict) -> int:
         now = datetime.now(TZ)
         today_like = f"{now.strftime('%Y-%m-%d')}%"
         done_bugs = await conn.fetch(
-            "SELECT * FROM bugs WHERE status IN ('done', 'tested', 'shipped') AND updated_at LIKE $1 ORDER BY id",
+            "SELECT * FROM bugs WHERE updated_at LIKE $1 ORDER BY id",
             today_like,
         )
         if now.hour >= RESULT_HOUR:
             done_features = await conn.fetch(
-                "SELECT * FROM features WHERE status IN ('done', 'tested', 'shipped') AND updated_at LIKE $1 ORDER BY id",
+                "SELECT * FROM features WHERE updated_at LIKE $1 ORDER BY id",
                 today_like,
             )
             await bot.send_message(

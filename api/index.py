@@ -20,6 +20,8 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
+    BotCommand,
+    BotCommandScopeChat,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -412,6 +414,15 @@ async def on_list_switch(cb: CallbackQuery, conn: asyncpg.Connection):
 
 @dp.message(Command("start"), F.chat.id == GROUP_ID)
 async def on_start(message: Message):
+    # подсказки команд при вводе «/» в этой группе
+    await message.bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Показать кнопки"),
+            BotCommand(command="bugs", description="Список открытых багов"),
+            BotCommand(command="delbug", description="Удалить баг: /delbug номер"),
+        ],
+        scope=BotCommandScopeChat(chat_id=GROUP_ID),
+    )
     await message.bot.send_message(
         message.chat.id,
         "Кнопки включены: используйте их внизу чата.",

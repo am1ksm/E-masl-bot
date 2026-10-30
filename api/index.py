@@ -181,7 +181,10 @@ def feature_keyboard(feature_id: int, status: str):
 
 def features_keyboard():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="➕ Добавить функционал")]],
+        keyboard=[
+            [KeyboardButton(text="➕ Добавить функционал")],
+            [KeyboardButton(text="📋 Все функционалы")],
+        ],
         resize_keyboard=True,
         is_persistent=True,
     )
@@ -342,6 +345,38 @@ async def on_button_add_feature(message: Message, conn: asyncpg.Connection):
     await message.reply(
         "Отправьте описание и фото функционала, по одному сообщению на пункт. "
         "Режим выключится через 10 минут без новых."
+    )
+
+
+def build_features_list(rows) -> str:
+    if not rows:
+        return "💡 Функционалов пока нет"
+    sections = [
+        ("new", "🆕 Новые"),
+        ("accepted", "✋ Приняты"),
+        ("working", "🔧 В процессе"),
+        ("done", "✅ Сделанные"),
+    ]
+    lines = [f"💡 <b>Все функционалы ({len(rows)})</b>"]
+    for key, title in sections:
+        items = [f for f in rows if f["status"] == key]
+        if not items:
+            continue
+        lines.append(f"\n<b>{title} ({len(items)})</b>")
+        for f in items:
+            who = f" — {html.escape(f['assignee'])}" if f["assignee"] else ""
+            link = source_link(f)
+            lines.append(f'<a href="{link}">#{f["id"]}</a> {html.escape(f["title"])}{who}')
+    return "\n".join(lines)
+
+
+@dp.message(F.chat.id == GROUP_ID, F.message_thread_id == FEATURES_THREAD_ID, F.text == "📋 Все функционалы")
+async def on_button_all_features(message: Message, conn: asyncpg.Connection):
+    rows = await conn.fetch("SELECT * FROM features ORDER BY id")
+    await message.bot.send_message(
+        message.chat.id,
+        build_features_list(rows),
+        message_thread_id=message.message_thread_id,
     )
 
 

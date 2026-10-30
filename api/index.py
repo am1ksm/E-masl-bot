@@ -867,17 +867,24 @@ def build_day_result(bugs_done, features_done) -> str:
         lines.append("\nЗа сегодня ничего не закрыто.")
         return "\n".join(lines)
 
-    if bugs_done:
-        lines.append(f"\n<b>🐞 Баги закрыты ({len(bugs_done)})</b>")
-        for b in bugs_done:
-            who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
-            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
-
-    if features_done:
-        lines.append(f"\n<b>💡 Функционал сделан ({len(features_done)})</b>")
-        for f in features_done:
-            who = f" — {html.escape(f['assignee'])}" if f["assignee"] else ""
-            lines.append(f'<a href="{source_link(f)}">#{f["id"]}</a> {html.escape(f["title"])}{who}' + "\n")
+    status_names = [("done", "✅ Сделано"), ("tested", "🧪 Протестировано"), ("shipped", "🚀 Залито")]
+    for title, items in (("🐞 Баги", bugs_done), ("💡 Функционал", features_done)):
+        if not items:
+            continue
+        counts = " · ".join(
+            f"{label} {sum(1 for i in items if i['status'] == key)}" for key, label in status_names
+        )
+        lines.append(f"\n<b>{title}</b>\n{counts}")
+        for key, label in status_names:
+            group = [i for i in items if i["status"] == key]
+            if not group:
+                continue
+            lines.append(f"\n<b>{label} ({len(group)})</b>")
+            for i in group:
+                who = f" — {html.escape(i['assignee'])}" if i["assignee"] else ""
+                lines.append(
+                    f'<a href="{source_link(i)}">#{i["id"]}</a> {html.escape(i["title"])}{who}' + "\n"
+                )
 
     return "\n".join(lines)
 

@@ -143,7 +143,7 @@ ACTION_TO_STATUS = {
     "ship": "shipped",
 }
 # какие кнопки доступны после каждого закрытого статуса
-NEXT_ACTIONS = {"done": "ship", "shipped": "test"}
+NEXT_ACTIONS = {"done": ["test", "rework"], "tested": ["ship", "rework"]}
 
 dp = Dispatcher()
 
@@ -166,14 +166,12 @@ def bug_card(bug) -> str:
 
 def bug_keyboard(bug_id: int, status: str):
     if status in NEXT_ACTIONS:
-        action = NEXT_ACTIONS[status]
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=BUTTON_LABELS[action], callback_data=f"bug:{bug_id}:{action}")
+            InlineKeyboardButton(text=BUTTON_LABELS[a], callback_data=f"bug:{bug_id}:{a}")
+            for a in NEXT_ACTIONS[status]
         ]])
-    if status == "tested":
-        return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=BUTTON_LABELS["rework"], callback_data=f"bug:{bug_id}:rework")
-        ]])
+    if status == "shipped":
+        return None
     row = [
         InlineKeyboardButton(text=BUTTON_LABELS[a], callback_data=f"bug:{bug_id}:{a}")
         for a in ("accept", "work", "done")
@@ -219,7 +217,7 @@ FEATURE_BUTTONS = {
     "rework": "🔁 На доработку",
 }
 FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done", "test": "tested", "ship": "shipped"}
-FEATURE_NEXT_ACTIONS = {"done": "ship", "shipped": "test"}
+FEATURE_NEXT_ACTIONS = {"done": ["test", "rework"], "tested": ["ship", "rework"]}
 
 
 def feature_card(f) -> str:
@@ -233,14 +231,12 @@ def feature_card(f) -> str:
 
 def feature_keyboard(feature_id: int, status: str):
     if status in FEATURE_NEXT_ACTIONS:
-        action = FEATURE_NEXT_ACTIONS[status]
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=FEATURE_BUTTONS[action], callback_data=f"feat:{feature_id}:{action}")
+            InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
+            for a in FEATURE_NEXT_ACTIONS[status]
         ]])
-    if status == "tested":
-        return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=FEATURE_BUTTONS["rework"], callback_data=f"feat:{feature_id}:rework")
-        ]])
+    if status == "shipped":
+        return None
     row = [
         InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
         for a in ("accept", "work", "done")
@@ -581,12 +577,12 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
         await cb.answer("Функционал не найден", show_alert=True)
         return
     if action == "rework":
-        if feature["status"] != "tested":
-            await cb.answer("Доработка доступна после теста", show_alert=True)
+        if feature["status"] not in ("done", "tested"):
+            await cb.answer("Доработка доступна после «Сделал»", show_alert=True)
             return
         await start_rework(cb, conn, "feature", feature["id"])
         return
-    if feature["status"] in ("done", "tested", "shipped") and FEATURE_NEXT_ACTIONS.get(feature["status"]) != action:
+    if feature["status"] in ("done", "tested", "shipped") and action not in FEATURE_NEXT_ACTIONS.get(feature["status"], []):
         await cb.answer("Уже закрыто")
         return
 
@@ -764,12 +760,12 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
         await cb.answer("Баг не найден", show_alert=True)
         return
     if action == "rework":
-        if bug["status"] != "tested":
-            await cb.answer("Доработка доступна после теста", show_alert=True)
+        if bug["status"] not in ("done", "tested"):
+            await cb.answer("Доработка доступна после «Сделал»", show_alert=True)
             return
         await start_rework(cb, conn, "bug", bug["id"])
         return
-    if bug["status"] in ("done", "tested", "shipped") and NEXT_ACTIONS.get(bug["status"]) != action:
+    if bug["status"] in ("done", "tested", "shipped") and action not in NEXT_ACTIONS.get(bug["status"], []):
         await cb.answer("Баг уже закрыт")
         return
 

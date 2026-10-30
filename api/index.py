@@ -103,10 +103,25 @@ STATUS_LABELS = {
     "accepted": "✋ Принял",
     "working": "🔧 Делаю",
     "done": "✅ Сделал",
+    "tested": "🧪 Протестировал",
     "shipped": "🚀 Залито",
 }
-BUTTON_LABELS = {"accept": "✋ Принял", "work": "🔧 Делаю", "done": "✅ Сделал", "ship": "🚀 Залито"}
-ACTION_TO_STATUS = {"accept": "accepted", "work": "working", "done": "done", "ship": "shipped"}
+BUTTON_LABELS = {
+    "accept": "✋ Принял",
+    "work": "🔧 Делаю",
+    "done": "✅ Сделал",
+    "test": "🧪 Протестировал",
+    "ship": "🚀 Залито",
+}
+ACTION_TO_STATUS = {
+    "accept": "accepted",
+    "work": "working",
+    "done": "done",
+    "test": "tested",
+    "ship": "shipped",
+}
+# какие кнопки доступны после каждого закрытого статуса
+NEXT_ACTIONS = {"done": "test", "tested": "ship"}
 
 dp = Dispatcher()
 
@@ -123,12 +138,13 @@ def bug_card(bug) -> str:
 
 
 def bug_keyboard(bug_id: int, status: str):
+    if status in NEXT_ACTIONS:
+        action = NEXT_ACTIONS[status]
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=BUTTON_LABELS[action], callback_data=f"bug:{bug_id}:{action}")
+        ]])
     if status == "shipped":
         return None
-    if status == "done":
-        return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=BUTTON_LABELS["ship"], callback_data=f"bug:{bug_id}:ship")
-        ]])
     row = [
         InlineKeyboardButton(text=BUTTON_LABELS[a], callback_data=f"bug:{bug_id}:{a}")
         for a in ("accept", "work", "done")
@@ -231,6 +247,7 @@ def build_summary(rows, include_done: bool = False) -> str:
     sections = [("new", "🆕 Новые"), ("accepted", "✋ Приняты"), ("working", "🔧 В работе")]
     if include_done:
         sections.append(("done", "✅ Сделанные"))
+        sections.append(("tested", "🧪 Протестированные"))
         sections.append(("shipped", "🚀 Залито"))
     lines = [head]
     for key, title in sections:
@@ -253,7 +270,7 @@ async def fetch_bugs(conn: asyncpg.Connection, include_done: bool = False):
     if include_done:
         return await conn.fetch("SELECT * FROM bugs ORDER BY id")
     return await conn.fetch(
-        "SELECT * FROM bugs WHERE status NOT IN ('done', 'shipped') ORDER BY id"
+        "SELECT * FROM bugs WHERE status NOT IN ('done', 'tested', 'shipped') ORDER BY id"
     )
 
 
@@ -564,7 +581,7 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
     if bug is None:
         await cb.answer("Баг не найден", show_alert=True)
         return
-    if bug["status"] == "shipped" or (bug["status"] == "done" and action != "ship"):
+    if bug["status"] in ("done", "tested", "shipped") and NEXT_ACTIONS.get(bug["status"]) != action:
         await cb.answer("Баг уже закрыт")
         return
 
@@ -678,7 +695,7 @@ async def handle_summary(headers: dict) -> int:
         now = datetime.now(TZ)
         today_like = f"{now.strftime('%Y-%m-%d')}%"
         done_bugs = await conn.fetch(
-            "SELECT * FROM bugs WHERE status IN ('done', 'shipped') AND updated_at LIKE $1 ORDER BY id",
+            "SELECT * FROM bugs WHERE status IN ('done', 'tested', 'shipped') AND updated_at LIKE $1 ORDER BY id",
             today_like,
         )
         if now.hour >= RESULT_HOUR:

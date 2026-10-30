@@ -122,7 +122,7 @@ ACTION_TO_STATUS = {
     "ship": "shipped",
 }
 # какие кнопки доступны после каждого закрытого статуса
-NEXT_ACTIONS = {"done": "test", "tested": "ship"}
+NEXT_ACTIONS = {"done": "ship", "shipped": "test"}
 
 dp = Dispatcher()
 
@@ -144,7 +144,7 @@ def bug_keyboard(bug_id: int, status: str):
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=BUTTON_LABELS[action], callback_data=f"bug:{bug_id}:{action}")
         ]])
-    if status == "shipped":
+    if status == "tested":
         return None
     row = [
         InlineKeyboardButton(text=BUTTON_LABELS[a], callback_data=f"bug:{bug_id}:{a}")
@@ -190,7 +190,7 @@ FEATURE_BUTTONS = {
     "ship": "🚀 Залито",
 }
 FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done", "test": "tested", "ship": "shipped"}
-FEATURE_NEXT_ACTIONS = {"done": "test", "tested": "ship"}
+FEATURE_NEXT_ACTIONS = {"done": "ship", "shipped": "test"}
 
 
 def feature_card(f) -> str:
@@ -208,7 +208,7 @@ def feature_keyboard(feature_id: int, status: str):
         return InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=FEATURE_BUTTONS[action], callback_data=f"feat:{feature_id}:{action}")
         ]])
-    if status == "shipped":
+    if status == "tested":
         return None
     row = [
         InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
@@ -275,8 +275,8 @@ def build_summary(rows, include_done: bool = False) -> str:
     sections = [("new", "🆕 Новые"), ("accepted", "✋ Приняты"), ("working", "🔧 В работе")]
     if include_done:
         sections.append(("done", "✅ Сделанные"))
-        sections.append(("tested", "🧪 Протестированные"))
         sections.append(("shipped", "🚀 Залито"))
+        sections.append(("tested", "🧪 Протестированные"))
     lines = [head]
     for key, title in sections:
         items = [b for b in rows if b["status"] == key]
@@ -411,8 +411,8 @@ def build_features_list(rows) -> str:
         ("accepted", "✋ Приняты"),
         ("working", "🔧 В процессе"),
         ("done", "✅ Сделанные"),
-        ("tested", "🧪 Протестированные"),
         ("shipped", "🚀 Залито"),
+        ("tested", "🧪 Протестированные"),
     ]
     lines = [f"💡 <b>Все функционалы ({len(rows)})</b>"]
     for key, title in sections:

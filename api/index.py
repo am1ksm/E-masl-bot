@@ -9,6 +9,7 @@ import html
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -55,6 +56,16 @@ CREATE TABLE IF NOT EXISTS bugs (
 )
 """
 
+PENDING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_bug (
+    user_id BIGINT PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    thread_id BIGINT,
+    created_at BIGINT NOT NULL
+)
+"""
+PENDING_TTL_SECONDS = 600  # сколько ждать сообщение после нажатия «Новый баг»
+
 STATUS_LABELS = {
     "new": "🆕 Новый",
     "accepted": "✋ Принял",
@@ -100,6 +111,7 @@ def main_keyboard():
     # постоянные кнопки внизу чата
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="➕ Новый баг")],
             [KeyboardButton(text="📋 Все баги"), KeyboardButton(text="🕑 Только открытые")],
             [KeyboardButton(text="🗑 Удалить баг")],
         ],
@@ -210,6 +222,20 @@ async def on_button_list(message: Message, conn: asyncpg.Connection):
     )
 
 
+@dp.message(F.chat.id == GROUP_ID, F.text == "➕ Новый баг")
+async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
+    await conn.execute(
+        """INSERT INTO pending_bug (user_id, chat_id, thread_id, created_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (user_id) DO UPDATE
+           SET chat_id = $2, thread_id = $3, created_at = $4""",
+        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
+    )
+    await message.reply(
+        "Отправьте скриншот или описание бага одним сообщением. Жду 10 минут."
+    )
+
+
 @dp.message(F.chat.id == GROUP_ID, F.text == "🗑 Удалить баг")
 async def on_button_delete_hint(message: Message):
     await message.reply("Чтобы удалить баг, отправьте /delbug и его номер, например: /delbug 5")
@@ -247,6 +273,16 @@ async def on_delete_bug(message: Message, conn: asyncpg.Connection):
 async def on_new_bug(message: Message, conn: asyncpg.Connection):
     if message.text and message.text.startswith("/"):
         return
+
+    # баг создаём только если этот пользователь недавно нажал «➕ Новый баг»
+    pending = await conn.fetchrow(
+        "SELECT * FROM pending_bug WHERE user_id = $1", message.from_user.id
+    )
+    if pending is None or int(time.time()) - pending["created_at"] > PENDING_TTL_SECONDS:
+        if pending is not None:
+            await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
+        return
+    await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
 
     raw = (message.text or message.caption or "").strip()
     title = raw.splitlines()[0][:120] if raw else "Скриншот без описания"
@@ -303,7 +339,9 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
 
 async def connect_db() -> asyncpg.Connection:
     conn = await asyncpg.connect(DATABASE_URL)
+    conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute(SCHEMA)
+    await conn.execute(PENDING_SCHEMA)
     return conn
 
 

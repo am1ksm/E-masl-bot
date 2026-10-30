@@ -125,6 +125,7 @@ STATUS_LABELS = {
     "working": "🔧 Делаю",
     "done": "✅ Сделал",
     "tested": "🚀 Готово на прод",
+    "rework": "🔁 На доработке",
     "shipped": "🚀 Залито",
 }
 BUTTON_LABELS = {
@@ -211,6 +212,7 @@ FEATURE_STATUS = {
     "working": "🔧 В процессе",
     "done": "✅ Сделал",
     "tested": "🚀 Готово на прод",
+    "rework": "🔁 На доработке",
     "shipped": "🚀 Залито",
 }
 FEATURE_BUTTONS = {
@@ -286,14 +288,14 @@ async def try_rework_reason(message: Message, conn: asyncpg.Connection) -> bool:
     reason = text.strip()
     now = datetime.now(TZ).isoformat(timespec="minutes")
     await conn.execute(
-        f"UPDATE {table} SET status = 'working', note = $1, updated_at = $2 WHERE id = $3",
+        f"UPDATE {table} SET status = 'rework', note = $1, updated_at = $2 WHERE id = $3",
         reason, now, pending["item_id"],
     )
     item = await conn.fetchrow(f"SELECT * FROM {table} WHERE id = $1", pending["item_id"])
     if pending["kind"] == "bug":
-        card, keyboard, label = bug_card(item), bug_keyboard(item["id"], "working"), "Баг"
+        card, keyboard, label = bug_card(item), bug_keyboard(item["id"], "rework"), "Баг"
     else:
-        card, keyboard, label = feature_card(item), feature_keyboard(item["id"], "working"), "Функционал"
+        card, keyboard, label = feature_card(item), feature_keyboard(item["id"], "rework"), "Функционал"
 
     if item["bot_msg_id"]:
         try:
@@ -365,7 +367,12 @@ def build_summary(rows, include_done: bool = False) -> str:
     if not rows:
         return f"{head}\n\nБагов нет ✨" if include_done else f"{head}\n\nОткрытых багов нет ✨"
 
-    sections = [("new", "🆕 Новые"), ("accepted", "✋ Приняты"), ("working", "🔧 В работе")]
+    sections = [
+        ("new", "🆕 Новые"),
+        ("accepted", "✋ Приняты"),
+        ("working", "🔧 В работе"),
+        ("rework", "🔁 На доработке"),
+    ]
     if include_done:
         sections.append(("done", "✅ Сделанные"))
         sections.append(("shipped", "🚀 Залито"))
@@ -512,6 +519,7 @@ def build_features_list(rows) -> str:
         ("new", "🆕 Новые"),
         ("accepted", "✋ Приняты"),
         ("working", "🔧 В процессе"),
+        ("rework", "🔁 На доработке"),
         ("done", "✅ Сделанные"),
         ("shipped", "🚀 Залито"),
         ("tested", "🧪 Протестированные"),
@@ -846,7 +854,12 @@ def build_reminder(open_rows, done_rows) -> str:
         lines.append("\nОткрытых багов нет, сегодня ничего не закрыто ✨")
         return "\n".join(lines)
 
-    sections = [("new", "🆕 Новые"), ("accepted", "✋ Приняты"), ("working", "🔧 В работе")]
+    sections = [
+        ("new", "🆕 Новые"),
+        ("accepted", "✋ Приняты"),
+        ("working", "🔧 В работе"),
+        ("rework", "🔁 На доработке"),
+    ]
     for key, title in sections:
         items = [b for b in open_rows if b["status"] == key]
         if not items:

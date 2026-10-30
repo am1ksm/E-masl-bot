@@ -80,6 +80,14 @@ def bug_keyboard(bug_id: int, status: str):
     return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
+def list_keyboard(include_done: bool):
+    if include_done:
+        button = InlineKeyboardButton(text="🕑 Только открытые", callback_data="list:open")
+    else:
+        button = InlineKeyboardButton(text="📋 Все баги", callback_data="list:all")
+    return InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+
 def user_name(user) -> str:
     return f"@{user.username}" if user.username else user.full_name
 
@@ -190,7 +198,23 @@ async def on_bugs_command(message: Message, conn: asyncpg.Connection):
         message.chat.id,
         build_summary(rows, include_done=include_done),
         message_thread_id=message.message_thread_id,
+        reply_markup=list_keyboard(include_done),
     )
+
+
+@dp.callback_query(F.data.startswith("list:"))
+async def on_list_switch(cb: CallbackQuery, conn: asyncpg.Connection):
+    include_done = cb.data == "list:all"
+    rows = await fetch_bugs(conn, include_done=include_done)
+    try:
+        await cb.message.edit_text(
+            build_summary(rows, include_done=include_done),
+            reply_markup=list_keyboard(include_done),
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+    await cb.answer()
 
 
 # ---------- HTTP-обработчики ----------
@@ -224,7 +248,12 @@ async def handle_summary(headers: dict) -> int:
     conn = await connect_db()
     try:
         rows = await fetch_bugs(conn)
-        await bot.send_message(GROUP_ID, build_summary(rows), message_thread_id=REPORT_THREAD_ID)
+        await bot.send_message(
+            GROUP_ID,
+            build_summary(rows),
+            message_thread_id=REPORT_THREAD_ID,
+            reply_markup=list_keyboard(False),
+        )
     finally:
         await conn.close()
         await bot.session.close()

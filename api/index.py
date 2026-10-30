@@ -363,7 +363,7 @@ def build_summary(rows, include_done: bool = False) -> str:
         for b in items:
             who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
             link = source_link(b)
-            lines.append(f'<a href="{link}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
+            lines.append(f'<a href="{link}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
     if include_done:
         lines.append(f"\nВсего багов: {len(rows)}")
     else:
@@ -500,7 +500,7 @@ def build_features_list(rows) -> str:
         for f in items:
             who = f" — {html.escape(f['assignee'])}" if f["assignee"] else ""
             link = source_link(f)
-            lines.append(f'<a href="{link}">#{f["id"]}</a> {html.escape(f["title"])}{who}')
+            lines.append(f'<a href="{link}">#{f["id"]}</a> {html.escape(f["title"])}{who}' + "\n")
     return "\n".join(lines)
 
 
@@ -785,13 +785,13 @@ def build_reminder(open_rows, done_rows) -> str:
         lines.append(f"\n<b>{title} ({len(items)})</b>")
         for b in items:
             who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
-            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
+            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
 
     if done_rows:
         lines.append(f"\n<b>✅ Сделано сегодня ({len(done_rows)})</b>")
         for b in done_rows:
             who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
-            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
+            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
 
     lines.append(f"\nОткрыто: {len(open_rows)}")
     return "\n".join(lines)
@@ -808,13 +808,13 @@ def build_day_result(bugs_done, features_done) -> str:
         lines.append(f"\n<b>🐞 Баги закрыты ({len(bugs_done)})</b>")
         for b in bugs_done:
             who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
-            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
+            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
 
     if features_done:
         lines.append(f"\n<b>💡 Функционал сделан ({len(features_done)})</b>")
         for f in features_done:
             who = f" — {html.escape(f['assignee'])}" if f["assignee"] else ""
-            lines.append(f'<a href="{source_link(f)}">#{f["id"]}</a> {html.escape(f["title"])}{who}')
+            lines.append(f'<a href="{source_link(f)}">#{f["id"]}</a> {html.escape(f["title"])}{who}' + "\n")
 
     return "\n".join(lines)
 

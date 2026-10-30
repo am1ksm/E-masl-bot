@@ -222,6 +222,34 @@ async def on_button_list(message: Message, conn: asyncpg.Connection):
     )
 
 
+@dp.message(Command("find"), F.chat.id == GROUP_ID)
+async def on_find_contact(message: Message, conn: asyncpg.Connection):
+    # /find Табиғат или /find Иванов Иван — ищет контакт по словам из ФИО (без паролей)
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.reply("Укажите ФИО: /find Иванов")
+        return
+
+    tokens = parts[1].split()
+    conditions = " AND ".join(f"full_name ILIKE ${i + 1}" for i in range(len(tokens)))
+    rows = await conn.fetch(
+        f"SELECT * FROM contacts WHERE {conditions} ORDER BY full_name LIMIT 10",
+        *[f"%{t}%" for t in tokens],
+    )
+    if not rows:
+        await message.reply("Никого не нашёл. Попробуйте фамилию или другое написание.")
+        return
+
+    lines = []
+    for r in rows:
+        lines.append(
+            f"<b>{html.escape(r['full_name'])}</b>\n"
+            f"{html.escape(r['role'])}, {html.escape(r['org'])}\n"
+            f"{html.escape(r['email'])}"
+        )
+    await message.reply("\n\n".join(lines))
+
+
 @dp.message(F.chat.id == GROUP_ID, F.text == "➕ Новый баг")
 async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
     await conn.execute(

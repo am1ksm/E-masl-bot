@@ -183,7 +183,7 @@ def main_keyboard():
     # постоянные кнопки внизу чата
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Новый баг")],
+            [KeyboardButton(text="➕ Новый баг"), KeyboardButton(text="⏹ Готово")],
             [KeyboardButton(text="📋 Все баги"), KeyboardButton(text="🕑 Только открытые")],
             [KeyboardButton(text="✍️ Напишите имя"), KeyboardButton(text="🗑 Удалить баг")],
         ],
@@ -624,6 +624,12 @@ async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
         "Отправляйте баги: скриншот или описание, каждый ответом («Ответить») на это сообщение. "
         "Режим работает, пока вы отправляете баги, и выключится через 10 минут без новых."
     )
+
+
+@dp.message(F.chat.id == GROUP_ID, F.text == "⏹ Готово")
+async def on_button_done_adding(message: Message, conn: asyncpg.Connection):
+    await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
+    await message.reply("Режим добавления багов выключен.")
 
 
 @dp.message(F.chat.id == GROUP_ID, F.text == "🗑 Удалить баг")

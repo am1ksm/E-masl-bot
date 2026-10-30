@@ -124,14 +124,14 @@ STATUS_LABELS = {
     "accepted": "✋ Принял",
     "working": "🔧 Делаю",
     "done": "✅ Сделал",
-    "tested": "🧪 Протестировал",
+    "tested": "🚀 Готово на прод",
     "shipped": "🚀 Залито",
 }
 BUTTON_LABELS = {
     "accept": "✋ Принял",
     "work": "🔧 Делаю",
     "done": "✅ Сделал",
-    "test": "🧪 Протестировал",
+    "test": "🧪 Протестировано",
     "ship": "🚀 Залито",
     "rework": "🔁 На доработку",
 }
@@ -143,7 +143,7 @@ ACTION_TO_STATUS = {
     "ship": "shipped",
 }
 # какие кнопки доступны после каждого закрытого статуса
-NEXT_ACTIONS = {"done": ["test", "rework"], "tested": ["ship", "rework"]}
+NEXT_ACTIONS = {"done": ["ship"], "shipped": ["test", "rework"]}
 
 dp = Dispatcher()
 
@@ -170,13 +170,18 @@ def bug_keyboard(bug_id: int, status: str):
             InlineKeyboardButton(text=BUTTON_LABELS[a], callback_data=f"bug:{bug_id}:{a}")
             for a in NEXT_ACTIONS[status]
         ]])
-    if status == "shipped":
+    if status == "tested":
         return None
-    row = [
-        InlineKeyboardButton(text=BUTTON_LABELS[a], callback_data=f"bug:{bug_id}:{a}")
-        for a in ("accept", "work", "done")
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=[row])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=BUTTON_LABELS["accept"], callback_data=f"bug:{bug_id}:accept"),
+            InlineKeyboardButton(text=BUTTON_LABELS["work"], callback_data=f"bug:{bug_id}:work"),
+        ],
+        [
+            InlineKeyboardButton(text=BUTTON_LABELS["done"], callback_data=f"bug:{bug_id}:done"),
+            InlineKeyboardButton(text=BUTTON_LABELS["ship"], callback_data=f"bug:{bug_id}:ship"),
+        ],
+    ])
 
 
 def list_keyboard(include_done: bool):
@@ -205,19 +210,19 @@ FEATURE_STATUS = {
     "accepted": "✋ Принял",
     "working": "🔧 В процессе",
     "done": "✅ Сделал",
-    "tested": "🧪 Протестировал",
+    "tested": "🚀 Готово на прод",
     "shipped": "🚀 Залито",
 }
 FEATURE_BUTTONS = {
     "accept": "✋ Принял",
     "work": "🔧 В процессе",
     "done": "✅ Сделал",
-    "test": "🧪 Протестировал",
+    "test": "🧪 Протестировано",
     "ship": "🚀 Залито",
     "rework": "🔁 На доработку",
 }
 FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done", "test": "tested", "ship": "shipped"}
-FEATURE_NEXT_ACTIONS = {"done": ["test", "rework"], "tested": ["ship", "rework"]}
+FEATURE_NEXT_ACTIONS = {"done": ["ship"], "shipped": ["test", "rework"]}
 
 
 def feature_card(f) -> str:
@@ -235,13 +240,18 @@ def feature_keyboard(feature_id: int, status: str):
             InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
             for a in FEATURE_NEXT_ACTIONS[status]
         ]])
-    if status == "shipped":
+    if status == "tested":
         return None
-    row = [
-        InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
-        for a in ("accept", "work", "done")
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=[row])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=FEATURE_BUTTONS["accept"], callback_data=f"feat:{feature_id}:accept"),
+            InlineKeyboardButton(text=FEATURE_BUTTONS["work"], callback_data=f"feat:{feature_id}:work"),
+        ],
+        [
+            InlineKeyboardButton(text=FEATURE_BUTTONS["done"], callback_data=f"feat:{feature_id}:done"),
+            InlineKeyboardButton(text=FEATURE_BUTTONS["ship"], callback_data=f"feat:{feature_id}:ship"),
+        ],
+    ])
 
 
 async def start_rework(cb: CallbackQuery, conn: asyncpg.Connection, kind: str, item_id: int):
@@ -577,8 +587,8 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
         await cb.answer("Функционал не найден", show_alert=True)
         return
     if action == "rework":
-        if feature["status"] not in ("done", "tested"):
-            await cb.answer("Доработка доступна после «Сделал»", show_alert=True)
+        if feature["status"] != "shipped":
+            await cb.answer("Доработка доступна после «Залито»", show_alert=True)
             return
         await start_rework(cb, conn, "feature", feature["id"])
         return
@@ -760,8 +770,8 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
         await cb.answer("Баг не найден", show_alert=True)
         return
     if action == "rework":
-        if bug["status"] not in ("done", "tested"):
-            await cb.answer("Доработка доступна после «Сделал»", show_alert=True)
+        if bug["status"] != "shipped":
+            await cb.answer("Доработка доступна после «Залито»", show_alert=True)
             return
         await start_rework(cb, conn, "bug", bug["id"])
         return

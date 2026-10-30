@@ -609,6 +609,33 @@ async def handle_webhook(body: bytes, headers: dict) -> int:
     return 200
 
 
+def build_reminder(open_rows, done_rows) -> str:
+    now = datetime.now(TZ).strftime("%d.%m %H:%M")
+    lines = [f"🔔 <b>Напоминание по багам ({now})</b>"]
+    if not open_rows and not done_rows:
+        lines.append("\nОткрытых багов нет, сегодня ничего не закрыто ✨")
+        return "\n".join(lines)
+
+    sections = [("new", "🆕 Новые"), ("accepted", "✋ Приняты"), ("working", "🔧 В работе")]
+    for key, title in sections:
+        items = [b for b in open_rows if b["status"] == key]
+        if not items:
+            continue
+        lines.append(f"\n<b>{title} ({len(items)})</b>")
+        for b in items:
+            who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
+            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
+
+    if done_rows:
+        lines.append(f"\n<b>✅ Сделано сегодня ({len(done_rows)})</b>")
+        for b in done_rows:
+            who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
+            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
+
+    lines.append(f"\nОткрыто: {len(open_rows)}")
+    return "\n".join(lines)
+
+
 async def handle_summary(headers: dict) -> int:
     if CRON_SECRET and headers.get("authorization") != f"Bearer {CRON_SECRET}":
         return 401
@@ -616,10 +643,15 @@ async def handle_summary(headers: dict) -> int:
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     conn = await connect_db()
     try:
-        rows = await fetch_bugs(conn)
+        open_rows = await fetch_bugs(conn)
+        today = datetime.now(TZ).strftime("%Y-%m-%d")
+        done_rows = await conn.fetch(
+            "SELECT * FROM bugs WHERE status = 'done' AND updated_at LIKE $1 ORDER BY id",
+            f"{today}%",
+        )
         await bot.send_message(
             GROUP_ID,
-            build_summary(rows),
+            build_reminder(open_rows, done_rows),
             message_thread_id=REPORT_THREAD_ID,
             reply_markup=list_keyboard(False),
         )

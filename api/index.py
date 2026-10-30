@@ -18,7 +18,15 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    Update,
+)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROUP_ID = int(os.environ["GROUP_ID"])
@@ -86,6 +94,18 @@ def list_keyboard(include_done: bool):
     else:
         button = InlineKeyboardButton(text="📋 Все баги", callback_data="list:all")
     return InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+
+def main_keyboard():
+    # постоянные кнопки внизу чата
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📋 Все баги"), KeyboardButton(text="🕑 Только открытые")],
+            [KeyboardButton(text="🗑 Удалить баг")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
 def user_name(user) -> str:
@@ -166,6 +186,57 @@ async def on_list_switch(cb: CallbackQuery, conn: asyncpg.Connection):
         if "message is not modified" not in str(e):
             raise
     await cb.answer()
+
+
+@dp.message(Command("start"), F.chat.id == GROUP_ID)
+async def on_start(message: Message):
+    await message.bot.send_message(
+        message.chat.id,
+        "Кнопки включены: используйте их внизу чата.",
+        message_thread_id=message.message_thread_id,
+        reply_markup=main_keyboard(),
+    )
+
+
+@dp.message(F.chat.id == GROUP_ID, F.text.in_({"📋 Все баги", "🕑 Только открытые"}))
+async def on_button_list(message: Message, conn: asyncpg.Connection):
+    include_done = message.text == "📋 Все баги"
+    rows = await fetch_bugs(conn, include_done=include_done)
+    await message.bot.send_message(
+        message.chat.id,
+        build_summary(rows, include_done=include_done),
+        message_thread_id=message.message_thread_id,
+        reply_markup=list_keyboard(include_done),
+    )
+
+
+@dp.message(F.chat.id == GROUP_ID, F.text == "🗑 Удалить баг")
+async def on_button_delete_hint(message: Message):
+    await message.reply("Чтобы удалить баг, отправьте /delbug и его номер, например: /delbug 5")
+
+
+@dp.message(Command("delbug"), F.chat.id == GROUP_ID)
+async def on_delete_bug(message: Message, conn: asyncpg.Connection):
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.reply("Укажите номер бага: /delbug 5")
+        return
+
+    bug_id = int(parts[1])
+    bug = await conn.fetchrow("SELECT * FROM bugs WHERE id = $1", bug_id)
+    if bug is None:
+        await message.reply(f"Баг #{bug_id} не найден.")
+        return
+
+    # удаляем карточку бота; исходное сообщение с фото остаётся
+    if bug["bot_msg_id"]:
+        try:
+            await message.bot.delete_message(bug["chat_id"], bug["bot_msg_id"])
+        except TelegramBadRequest:
+            pass  # карточка уже удалена или у бота нет прав
+
+    await conn.execute("DELETE FROM bugs WHERE id = $1", bug_id)
+    await message.reply(f"Баг #{bug_id} удалён.")
 
 
 @dp.message(

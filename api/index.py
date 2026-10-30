@@ -92,6 +92,16 @@ def user_name(user) -> str:
     return f"@{user.username}" if user.username else user.full_name
 
 
+def source_link(bug) -> str:
+    # ссылка на исходное сообщение (фото + описание) в теме
+    chat_part = str(abs(bug["chat_id"]))
+    if chat_part.startswith("100"):
+        chat_part = chat_part[3:]  # убираем префикс -100 из ID супергруппы
+    if bug["thread_id"]:
+        return f"https://t.me/c/{chat_part}/{bug['thread_id']}/{bug['source_msg_id']}"
+    return f"https://t.me/c/{chat_part}/{bug['source_msg_id']}"
+
+
 def build_summary(rows, include_done: bool = False) -> str:
     today = datetime.now(TZ).strftime("%d.%m")
     if include_done:
@@ -112,7 +122,8 @@ def build_summary(rows, include_done: bool = False) -> str:
         lines.append(f"\n<b>{title} ({len(items)})</b>")
         for b in items:
             who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
-            lines.append(f"#{b['id']} {html.escape(b['title'])}{who}")
+            link = source_link(b)
+            lines.append(f'<a href="{link}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
     if include_done:
         lines.append(f"\nВсего багов: {len(rows)}")
     else:

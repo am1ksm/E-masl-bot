@@ -128,6 +128,35 @@ async def fetch_bugs(conn: asyncpg.Connection, include_done: bool = False):
 
 # ---------- хендлеры Telegram ----------
 
+@dp.message(Command("bugs"), F.chat.id == GROUP_ID)
+async def on_bugs_command(message: Message, conn: asyncpg.Connection):
+    # «/bugs» — только открытые, «/bugs all» — все, включая сделанные
+    parts = (message.text or "").split()
+    include_done = len(parts) > 1 and parts[1].lower() == "all"
+    rows = await fetch_bugs(conn, include_done=include_done)
+    await message.bot.send_message(
+        message.chat.id,
+        build_summary(rows, include_done=include_done),
+        message_thread_id=message.message_thread_id,
+        reply_markup=list_keyboard(include_done),
+    )
+
+
+@dp.callback_query(F.data.startswith("list:"))
+async def on_list_switch(cb: CallbackQuery, conn: asyncpg.Connection):
+    include_done = cb.data == "list:all"
+    rows = await fetch_bugs(conn, include_done=include_done)
+    try:
+        await cb.message.edit_text(
+            build_summary(rows, include_done=include_done),
+            reply_markup=list_keyboard(include_done),
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+    await cb.answer()
+
+
 @dp.message(
     F.chat.id == GROUP_ID,
     F.message_thread_id == BUGS_THREAD_ID,
@@ -186,35 +215,6 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
         if "message is not modified" not in str(e):
             raise
     await cb.answer(STATUS_LABELS[new_status])
-
-
-@dp.message(Command("bugs"), F.chat.id == GROUP_ID)
-async def on_bugs_command(message: Message, conn: asyncpg.Connection):
-    # «/bugs» — только открытые, «/bugs all» — все, включая сделанные
-    parts = (message.text or "").split()
-    include_done = len(parts) > 1 and parts[1].lower() == "all"
-    rows = await fetch_bugs(conn, include_done=include_done)
-    await message.bot.send_message(
-        message.chat.id,
-        build_summary(rows, include_done=include_done),
-        message_thread_id=message.message_thread_id,
-        reply_markup=list_keyboard(include_done),
-    )
-
-
-@dp.callback_query(F.data.startswith("list:"))
-async def on_list_switch(cb: CallbackQuery, conn: asyncpg.Connection):
-    include_done = cb.data == "list:all"
-    rows = await fetch_bugs(conn, include_done=include_done)
-    try:
-        await cb.message.edit_text(
-            build_summary(rows, include_done=include_done),
-            reply_markup=list_keyboard(include_done),
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
-    await cb.answer()
 
 
 # ---------- HTTP-обработчики ----------

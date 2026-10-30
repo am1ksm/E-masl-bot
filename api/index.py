@@ -322,6 +322,9 @@ async def post_tested(bot: Bot, conn, item, kind: str, table: str):
         f'{html.escape(item["title"])}\n'
         f'<a href="{link}">Открыть исходное сообщение</a>',
         message_thread_id=TESTED_THREAD_ID,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🚀 Залито", callback_data=f"ship:{'bug' if table == 'bugs' else 'feat'}:{item['id']}")
+        ]]),
     )
     await conn.execute(f"UPDATE {table} SET posted_tested = TRUE WHERE id = $1", item["id"])
 
@@ -824,6 +827,44 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
     if new_status == "tested":
         await post_tested(cb.bot, conn, bug, "баг", "bugs")
     await cb.answer(STATUS_LABELS[new_status])
+
+
+@dp.callback_query(F.data.startswith("ship:"))
+async def on_ship_from_tested(cb: CallbackQuery, conn: asyncpg.Connection):
+    _, kind, item_id_s = cb.data.split(":")
+    table = "bugs" if kind == "bug" else "features"
+    item = await conn.fetchrow(f"SELECT * FROM {table} WHERE id = $1", int(item_id_s))
+    if item is None:
+        await cb.answer("Не найдено", show_alert=True)
+        return
+    if item["status"] != "tested":
+        await cb.answer("Уже не «Готово на прод»", show_alert=True)
+        return
+
+    now = datetime.now(TZ).isoformat(timespec="minutes")
+    await conn.execute(f"UPDATE {table} SET status = 'shipped', updated_at = $1 WHERE id = $2", now, item["id"])
+    label = "Баг" if kind == "bug" else "Функционал"
+    try:
+        await cb.message.edit_text(
+            f"🚀 <b>Залито: {label.lower()} #{item['id']}</b>\n{html.escape(item['title'])}\n"
+            f'<a href="{source_link(item)}">Открыть исходное сообщение</a>',
+            reply_markup=None,
+        )
+    except TelegramBadRequest:
+        pass
+
+    # обновляем карточку в исходной теме
+    item = await conn.fetchrow(f"SELECT * FROM {table} WHERE id = $1", item["id"])
+    if item["bot_msg_id"]:
+        try:
+            if kind == "bug":
+                text, markup = bug_card(item), bug_keyboard(item["id"], "shipped")
+            else:
+                text, markup = feature_card(item), feature_keyboard(item["id"], "shipped")
+            await cb.bot.edit_message_text(text, chat_id=item["chat_id"], message_id=item["bot_msg_id"], reply_markup=markup)
+        except TelegramBadRequest:
+            pass
+    await cb.answer("🚀 Залито")
 
 
 # ---------- HTTP-обработчики ----------

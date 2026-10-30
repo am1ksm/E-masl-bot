@@ -314,7 +314,7 @@ async def find_contacts_text(conn: asyncpg.Connection, query: str) -> str:
         return "Никого не нашёл. Попробуйте фамилию или другое написание."
     return "\n\n".join(
         f"<b>{html.escape(r['full_name'])}</b>\n"
-        f"{html.escape(r['role'])}, {html.escape(r['nickname'])}\n"
+        f"{html.escape(r['role'])}, {html.escape(r['org'])}\n"
         f"{html.escape(r['email'])}"
         for r in rows
     )

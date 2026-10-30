@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS pending_bug (
     created_at BIGINT NOT NULL
 )
 """
+PENDING_SEARCH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_search (
+    user_id BIGINT PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    thread_id BIGINT,
+    created_at BIGINT NOT NULL
+)
+"""
 PENDING_TTL_SECONDS = 600  # сколько ждать сообщение после нажатия «Новый баг»
 
 STATUS_LABELS = {
@@ -113,7 +121,7 @@ def main_keyboard():
         keyboard=[
             [KeyboardButton(text="➕ Новый баг")],
             [KeyboardButton(text="📋 Все баги"), KeyboardButton(text="🕑 Только открытые")],
-            [KeyboardButton(text="🗑 Удалить баг")],
+            [KeyboardButton(text="✍️ Напишите имя"), KeyboardButton(text="🗑 Удалить баг")],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -222,32 +230,34 @@ async def on_button_list(message: Message, conn: asyncpg.Connection):
     )
 
 
-@dp.message(Command("find"), F.chat.id == GROUP_ID)
-async def on_find_contact(message: Message, conn: asyncpg.Connection):
-    # /find Табиғат или /find Иванов Иван — ищет контакт по словам из ФИО (без паролей)
-    parts = (message.text or "").split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
-        await message.reply("Укажите ФИО: /find Иванов")
-        return
-
-    tokens = parts[1].split()
+async def find_contacts_text(conn: asyncpg.Connection, query: str) -> str:
+    tokens = query.split()
+    if not tokens:
+        return "Напишите ФИО или его часть."
     conditions = " AND ".join(f"full_name ILIKE ${i + 1}" for i in range(len(tokens)))
     rows = await conn.fetch(
         f"SELECT * FROM contacts WHERE {conditions} ORDER BY full_name LIMIT 10",
         *[f"%{t}%" for t in tokens],
     )
     if not rows:
-        await message.reply("Никого не нашёл. Попробуйте фамилию или другое написание.")
-        return
+        return "Никого не нашёл. Попробуйте фамилию или другое написание."
+    return "\n\n".join(
+        f"<b>{html.escape(r['full_name'])}</b>\n"
+        f"{html.escape(r['role'])}, {html.escape(r['org'])}\n"
+        f"{html.escape(r['email'])}"
+        for r in rows
+    )
 
-    lines = []
-    for r in rows:
-        lines.append(
-            f"<b>{html.escape(r['full_name'])}</b>\n"
-            f"{html.escape(r['role'])}, {html.escape(r['nickname'])}\n"
-            f"{html.escape(r['email'])}"
-        )
-    await message.reply("\n\n".join(lines))
+
+@dp.message(F.chat.id == GROUP_ID, F.text == "✍️ Напишите имя")
+async def on_button_ask_name(message: Message, conn: asyncpg.Connection):
+    await conn.execute(
+        """INSERT INTO pending_search (user_id, chat_id, thread_id, created_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (user_id) DO UPDATE SET chat_id = $2, thread_id = $3, created_at = $4""",
+        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
+    )
+    await message.reply("Напишите фамилию, имя или отчество депутата или сотрудника.")
 
 
 @dp.message(F.chat.id == GROUP_ID, F.text == "➕ Новый баг")
@@ -301,6 +311,16 @@ async def on_delete_bug(message: Message, conn: asyncpg.Connection):
 )
 async def on_new_bug(message: Message, conn: asyncpg.Connection):
     if message.text and message.text.startswith("/"):
+        return
+
+    # если пользователь нажал «Напишите имя», это запрос на поиск, а не баг
+    search = await conn.fetchrow(
+        "SELECT * FROM pending_search WHERE user_id = $1", message.from_user.id
+    )
+    if search is not None:
+        await conn.execute("DELETE FROM pending_search WHERE user_id = $1", message.from_user.id)
+        if message.text and int(time.time()) - search["created_at"] <= PENDING_TTL_SECONDS:
+            await message.reply(await find_contacts_text(conn, message.text.strip()))
         return
 
     # баг создаём только если этот пользователь недавно нажал «➕ Новый баг»
@@ -374,6 +394,7 @@ async def connect_db() -> asyncpg.Connection:
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute(SCHEMA)
     await conn.execute(PENDING_SCHEMA)
+    await conn.execute(PENDING_SEARCH_SCHEMA)
     return conn
 
 

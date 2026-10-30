@@ -183,7 +183,7 @@ def main_keyboard():
     # постоянные кнопки внизу чата
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Новый баг"), KeyboardButton(text="⏹ Готово")],
+            [KeyboardButton(text="➕ Новый баг")],
             [KeyboardButton(text="📋 Все баги"), KeyboardButton(text="🕑 Только открытые")],
             [KeyboardButton(text="✍️ Напишите имя"), KeyboardButton(text="🗑 Удалить баг")],
         ],
@@ -621,15 +621,9 @@ async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
         message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
     )
     await message.reply(
-        "Отправляйте баги: скриншот или описание, каждое сообщение — отдельный баг. "
-        "Режим работает, пока вы отправляете баги, выключится кнопкой «⏹ Готово» или через 10 минут без новых."
+        "Отправьте скриншот или описание бага одним сообщением. Только одна попытка: "
+        "следующее сообщение станет багом, потом режим выключится."
     )
-
-
-@dp.message(F.chat.id == GROUP_ID, F.text == "⏹ Готово")
-async def on_button_done_adding(message: Message, conn: asyncpg.Connection):
-    await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
-    await message.reply("Режим добавления багов выключен.")
 
 
 @dp.message(F.chat.id == GROUP_ID, F.text == "🗑 Удалить баг")
@@ -680,11 +674,8 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
         if pending is not None:
             await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
         return
-    # режим «несколько багов»: ожидание продлевается после каждого созданного бага
-    await conn.execute(
-        "UPDATE pending_bug SET created_at = $1 WHERE user_id = $2",
-        int(time.time()), message.from_user.id,
-    )
+    # одна попытка на одно нажатие «➕ Новый баг»: режим закрывается сразу после бага
+    await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
 
     raw = (message.text or message.caption or "").strip()
     title = raw.splitlines()[0][:120] if raw else "Скриншот без описания"

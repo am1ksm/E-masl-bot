@@ -339,7 +339,6 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
 
 async def connect_db() -> asyncpg.Connection:
     conn = await asyncpg.connect(DATABASE_URL)
-    conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute(SCHEMA)
     await conn.execute(PENDING_SCHEMA)
     return conn

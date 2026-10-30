@@ -128,6 +128,14 @@ def main_keyboard():
     )
 
 
+def search_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="✍️ Напишите имя")]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
 def user_name(user) -> str:
     return f"@{user.username}" if user.username else user.full_name
 
@@ -214,7 +222,9 @@ async def on_start(message: Message):
         message.chat.id,
         "Кнопки включены: используйте их внизу чата.",
         message_thread_id=message.message_thread_id,
-        reply_markup=main_keyboard(),
+        reply_markup=(
+            main_keyboard() if message.message_thread_id == BUGS_THREAD_ID else search_keyboard()
+        ),
     )
 
 
@@ -258,6 +268,20 @@ async def on_button_ask_name(message: Message, conn: asyncpg.Connection):
         message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
     )
     await message.reply("Напишите фамилию, имя или отчество депутата или сотрудника.")
+
+
+@dp.message(F.chat.id == GROUP_ID, F.message_thread_id != BUGS_THREAD_ID, F.text)
+async def on_name_query(message: Message, conn: asyncpg.Connection):
+    if message.text.startswith("/"):
+        return
+    search = await conn.fetchrow(
+        "SELECT * FROM pending_search WHERE user_id = $1", message.from_user.id
+    )
+    if search is None:
+        return
+    await conn.execute("DELETE FROM pending_search WHERE user_id = $1", message.from_user.id)
+    if int(time.time()) - search["created_at"] <= PENDING_TTL_SECONDS:
+        await message.reply(await find_contacts_text(conn, message.text.strip()))
 
 
 @dp.message(F.chat.id == GROUP_ID, F.text == "➕ Новый баг")
@@ -311,16 +335,6 @@ async def on_delete_bug(message: Message, conn: asyncpg.Connection):
 )
 async def on_new_bug(message: Message, conn: asyncpg.Connection):
     if message.text and message.text.startswith("/"):
-        return
-
-    # если пользователь нажал «Напишите имя», это запрос на поиск, а не баг
-    search = await conn.fetchrow(
-        "SELECT * FROM pending_search WHERE user_id = $1", message.from_user.id
-    )
-    if search is not None:
-        await conn.execute("DELETE FROM pending_search WHERE user_id = $1", message.from_user.id)
-        if message.text and int(time.time()) - search["created_at"] <= PENDING_TTL_SECONDS:
-            await message.reply(await find_contacts_text(conn, message.text.strip()))
         return
 
     # баг создаём только если этот пользователь недавно нажал «➕ Новый баг»

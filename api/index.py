@@ -32,7 +32,9 @@ from aiogram.types import (
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROUP_ID = int(os.environ["GROUP_ID"])
 BUGS_THREAD_ID = int(os.environ["BUGS_THREAD_ID"])
-FEATURES_THREAD_ID = int(os.environ.get("FEATURES_THREAD_ID") or 0)  # тема «Функционал», 0 = выключено
+FEATURES_THREAD_ID = int(os.environ.get("FEATURES_THREAD_ID") or 0)
+RESULT_THREAD_ID = int(os.environ.get("RESULT_THREAD_ID") or REPORT_THREAD_ID)  # тема «Результат дня»
+RESULT_HOUR = 17  # с этого часа (по Алматы) отправляем «Результат дня» вместо напоминания  # тема «Функционал», 0 = выключено
 REPORT_THREAD_ID = int(os.environ.get("REPORT_THREAD_ID") or BUGS_THREAD_ID)
 DATABASE_URL = os.environ["DATABASE_URL"]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -636,6 +638,28 @@ def build_reminder(open_rows, done_rows) -> str:
     return "\n".join(lines)
 
 
+def build_day_result(bugs_done, features_done) -> str:
+    today = datetime.now(TZ).strftime("%d.%m")
+    lines = [f"🏁 <b>Результат дня ({today})</b>"]
+    if not bugs_done and not features_done:
+        lines.append("\nЗа сегодня ничего не закрыто.")
+        return "\n".join(lines)
+
+    if bugs_done:
+        lines.append(f"\n<b>🐞 Баги закрыты ({len(bugs_done)})</b>")
+        for b in bugs_done:
+            who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
+            lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}')
+
+    if features_done:
+        lines.append(f"\n<b>💡 Функционал сделан ({len(features_done)})</b>")
+        for f in features_done:
+            who = f" — {html.escape(f['assignee'])}" if f["assignee"] else ""
+            lines.append(f'<a href="{source_link(f)}">#{f["id"]}</a> {html.escape(f["title"])}{who}')
+
+    return "\n".join(lines)
+
+
 async def handle_summary(headers: dict) -> int:
     if CRON_SECRET and headers.get("authorization") != f"Bearer {CRON_SECRET}":
         return 401
@@ -643,18 +667,29 @@ async def handle_summary(headers: dict) -> int:
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     conn = await connect_db()
     try:
-        open_rows = await fetch_bugs(conn)
-        today = datetime.now(TZ).strftime("%Y-%m-%d")
-        done_rows = await conn.fetch(
-            "SELECT * FROM bugs WHERE status = 'done' AND updated_at LIKE $1 ORDER BY id",
-            f"{today}%",
+        now = datetime.now(TZ)
+        today_like = f"{now.strftime('%Y-%m-%d')}%"
+        done_bugs = await conn.fetch(
+            "SELECT * FROM bugs WHERE status = 'done' AND updated_at LIKE $1 ORDER BY id", today_like
         )
-        await bot.send_message(
-            GROUP_ID,
-            build_reminder(open_rows, done_rows),
-            message_thread_id=REPORT_THREAD_ID,
-            reply_markup=list_keyboard(False),
-        )
+        if now.hour >= RESULT_HOUR:
+            done_features = await conn.fetch(
+                "SELECT * FROM features WHERE status = 'done' AND updated_at LIKE $1 ORDER BY id",
+                today_like,
+            )
+            await bot.send_message(
+                GROUP_ID,
+                build_day_result(done_bugs, done_features),
+                message_thread_id=RESULT_THREAD_ID,
+            )
+        else:
+            open_rows = await fetch_bugs(conn)
+            await bot.send_message(
+                GROUP_ID,
+                build_reminder(open_rows, done_bugs),
+                message_thread_id=REPORT_THREAD_ID,
+                reply_markup=list_keyboard(False),
+            )
     finally:
         await conn.close()
         await bot.session.close()

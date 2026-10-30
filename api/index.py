@@ -636,16 +636,17 @@ async def on_name_query(message: Message, conn: asyncpg.Connection):
 
 @dp.message(F.chat.id == GROUP_ID, F.text == "➕ Новый баг")
 async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
-    await conn.execute(
-        """INSERT INTO pending_bug (user_id, chat_id, thread_id, created_at)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (user_id) DO UPDATE
-           SET chat_id = $2, thread_id = $3, created_at = $4""",
-        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
-    )
-    await message.reply(
+    prompt = await message.reply(
         "Отправьте скриншот или описание бага одним сообщением. Только одна попытка: "
         "следующее сообщение станет багом, потом режим выключится."
+    )
+    await conn.execute(
+        """INSERT INTO pending_bug (user_id, chat_id, thread_id, created_at, prompt_msg_id, button_msg_id)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (user_id) DO UPDATE
+           SET chat_id = $2, thread_id = $3, created_at = $4, prompt_msg_id = $5, button_msg_id = $6""",
+        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
+        prompt.message_id, message.message_id,
     )
 
 
@@ -728,6 +729,7 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
             await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
         return
     # одна попытка на одно нажатие «➕ Новый баг»: режим закрывается сразу после бага
+    service_msg_ids = [pending["prompt_msg_id"], pending["button_msg_id"]]
     await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
 
     raw = (message.text or message.caption or "").strip()
@@ -744,6 +746,14 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
     sent = await message.reply(bug_card(bug), reply_markup=bug_keyboard(bug_id, "new"))
     await conn.execute("UPDATE bugs SET bot_msg_id = $1 WHERE id = $2", sent.message_id, bug_id)
     log.info("Создан баг #%s", bug_id)
+
+    # убираем только служебные сообщения самого пользователя и бота, сообщения других участников не трогаем
+    for mid in service_msg_ids:
+        if mid:
+            try:
+                await message.bot.delete_message(message.chat.id, mid)
+            except TelegramBadRequest:
+                pass
 
 
 @dp.callback_query(F.data.startswith("bug:"))
@@ -803,6 +813,8 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS note TEXT")
     await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS note TEXT")
     await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS bot_msg_id BIGINT")
+    await conn.execute("ALTER TABLE pending_bug ADD COLUMN IF NOT EXISTS prompt_msg_id BIGINT")
+    await conn.execute("ALTER TABLE pending_bug ADD COLUMN IF NOT EXISTS button_msg_id BIGINT")
     return conn
 
 

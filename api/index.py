@@ -84,13 +84,18 @@ def user_name(user) -> str:
     return f"@{user.username}" if user.username else user.full_name
 
 
-def build_summary(rows) -> str:
+def build_summary(rows, include_done: bool = False) -> str:
     today = datetime.now(TZ).strftime("%d.%m")
-    head = f"🕑 Сводка багов на 14:00 ({today})"
+    if include_done:
+        head = f"📋 Все баги ({today})"
+    else:
+        head = f"🕑 Сводка багов на 14:00 ({today})"
     if not rows:
-        return f"{head}\n\nОткрытых багов нет ✨"
+        return f"{head}\n\nБагов нет ✨" if include_done else f"{head}\n\nОткрытых багов нет ✨"
 
     sections = [("new", "🆕 Новые"), ("accepted", "✋ Приняты"), ("working", "🔧 В работе")]
+    if include_done:
+        sections.append(("done", "✅ Сделанные"))
     lines = [head]
     for key, title in sections:
         items = [b for b in rows if b["status"] == key]
@@ -100,11 +105,16 @@ def build_summary(rows) -> str:
         for b in items:
             who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
             lines.append(f"#{b['id']} {html.escape(b['title'])}{who}")
-    lines.append(f"\nВсего открыто: {len(rows)}")
+    if include_done:
+        lines.append(f"\nВсего багов: {len(rows)}")
+    else:
+        lines.append(f"\nВсего открыто: {len(rows)}")
     return "\n".join(lines)
 
 
-async def fetch_open_bugs(conn: asyncpg.Connection):
+async def fetch_bugs(conn: asyncpg.Connection, include_done: bool = False):
+    if include_done:
+        return await conn.fetch("SELECT * FROM bugs ORDER BY id")
     return await conn.fetch("SELECT * FROM bugs WHERE status != 'done' ORDER BY id")
 
 
@@ -172,9 +182,14 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
 
 @dp.message(Command("bugs"), F.chat.id == GROUP_ID)
 async def on_bugs_command(message: Message, conn: asyncpg.Connection):
-    rows = await fetch_open_bugs(conn)
+    # «/bugs» — только открытые, «/bugs all» — все, включая сделанные
+    parts = (message.text or "").split()
+    include_done = len(parts) > 1 and parts[1].lower() == "all"
+    rows = await fetch_bugs(conn, include_done=include_done)
     await message.bot.send_message(
-        message.chat.id, build_summary(rows), message_thread_id=message.message_thread_id
+        message.chat.id,
+        build_summary(rows, include_done=include_done),
+        message_thread_id=message.message_thread_id,
     )
 
 
@@ -208,7 +223,7 @@ async def handle_summary(headers: dict) -> int:
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     conn = await connect_db()
     try:
-        rows = await fetch_open_bugs(conn)
+        rows = await fetch_bugs(conn)
         await bot.send_message(GROUP_ID, build_summary(rows), message_thread_id=REPORT_THREAD_ID)
     finally:
         await conn.close()

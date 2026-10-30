@@ -244,7 +244,7 @@ async def on_find_contact(message: Message, conn: asyncpg.Connection):
     for r in rows:
         lines.append(
             f"<b>{html.escape(r['full_name'])}</b>\n"
-            f"{html.escape(r['role'])}, {html.escape(r['org'])}\n"
+            f"{html.escape(r['role'])}, {html.escape(r['nickname'])}\n"
             f"{html.escape(r['email'])}"
         )
     await message.reply("\n\n".join(lines))

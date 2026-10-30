@@ -927,10 +927,7 @@ async def handle_summary(headers: dict) -> int:
             today_like,
         )
         if now.hour >= RESULT_HOUR:
-            done_features = await conn.fetch(
-                "SELECT * FROM features WHERE updated_at LIKE $1 ORDER BY id",
-                today_like,
-            )
+            done_features = []  # функционал пока не выводим в результат дня
             await bot.send_message(
                 GROUP_ID,
                 build_day_result(done_bugs, done_features),

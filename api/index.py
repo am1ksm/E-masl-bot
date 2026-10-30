@@ -621,7 +621,7 @@ async def on_button_new_bug(message: Message, conn: asyncpg.Connection):
         message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
     )
     await message.reply(
-        "Отправляйте баги: скриншот или описание, по одному сообщению на баг. "
+        "Отправляйте баги: скриншот или описание, каждый ответом («Ответить») на это сообщение. "
         "Режим работает, пока вы отправляете баги, и выключится через 10 минут без новых."
     )
 
@@ -674,6 +674,11 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
         if pending is not None:
             await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
         return
+    # баг создаём только ответом («Ответить») на сообщение бота; обычный текст в теме игнорируем
+    reply = message.reply_to_message
+    if reply is None or reply.from_user is None or not reply.from_user.is_bot:
+        return
+
     # режим «несколько багов»: ожидание продлевается после каждого созданного бага
     await conn.execute(
         "UPDATE pending_bug SET created_at = $1 WHERE user_id = $2",

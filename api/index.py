@@ -312,7 +312,7 @@ async def try_rework_reason(message: Message, conn: asyncpg.Connection) -> bool:
     return True
 
 
-async def post_tested(bot: Bot, item, kind: str):
+async def post_tested(bot: Bot, conn, item, kind: str, table: str):
     if not TESTED_THREAD_ID:
         return
     link = source_link(item)
@@ -323,6 +323,19 @@ async def post_tested(bot: Bot, item, kind: str):
         f'<a href="{link}">Открыть исходное сообщение</a>',
         message_thread_id=TESTED_THREAD_ID,
     )
+    await conn.execute(f"UPDATE {table} SET posted_tested = TRUE WHERE id = $1", item["id"])
+
+
+async def sync_tested(bot: Bot, conn):
+    """Отправляет в тему «На проде» все баги и функционал со статусом «Готово на прод», которые ещё не отправлены."""
+    if not TESTED_THREAD_ID:
+        return
+    for table, kind in (("bugs", "баг"), ("features", "функционал")):
+        rows = await conn.fetch(
+            f"SELECT * FROM {table} WHERE status = 'tested' AND posted_tested = FALSE ORDER BY id"
+        )
+        for row in rows:
+            await post_tested(bot, conn, row, kind, table)
 
 
 def features_keyboard():
@@ -626,7 +639,7 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
         if "message is not modified" not in str(e):
             raise
     if new_status == "tested":
-        await post_tested(cb.bot, feature, "функционал")
+        await post_tested(cb.bot, conn, feature, "функционал", "features")
     await cb.answer(FEATURE_STATUS[new_status])
 
 
@@ -809,7 +822,7 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
         if "message is not modified" not in str(e):
             raise
     if new_status == "tested":
-        await post_tested(cb.bot, bug, "баг")
+        await post_tested(cb.bot, conn, bug, "баг", "bugs")
     await cb.answer(STATUS_LABELS[new_status])
 
 
@@ -829,6 +842,8 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS bot_msg_id BIGINT")
     await conn.execute("ALTER TABLE pending_bug ADD COLUMN IF NOT EXISTS prompt_msg_id BIGINT")
     await conn.execute("ALTER TABLE pending_bug ADD COLUMN IF NOT EXISTS button_msg_id BIGINT")
+    await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS posted_tested BOOLEAN NOT NULL DEFAULT FALSE")
+    await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS posted_tested BOOLEAN NOT NULL DEFAULT FALSE")
     return conn
 
 
@@ -920,6 +935,7 @@ async def handle_summary(headers: dict) -> int:
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     conn = await connect_db()
     try:
+        await sync_tested(bot, conn)
         now = datetime.now(TZ)
         today_like = f"{now.strftime('%Y-%m-%d')}%"
         done_bugs = await conn.fetch(

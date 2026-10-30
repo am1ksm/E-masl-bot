@@ -97,6 +97,16 @@ CREATE TABLE IF NOT EXISTS pending_feature (
     created_at BIGINT NOT NULL
 )
 """
+PENDING_REWORK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_rework (
+    user_id BIGINT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    item_id BIGINT NOT NULL,
+    chat_id BIGINT NOT NULL,
+    thread_id BIGINT,
+    created_at BIGINT NOT NULL
+)
+"""
 PENDING_TTL_SECONDS = 600  # сколько ждать сообщение после нажатия «Новый баг»
 
 STATUS_LABELS = {
@@ -113,6 +123,7 @@ BUTTON_LABELS = {
     "done": "✅ Сделал",
     "test": "🧪 Протестировал",
     "ship": "🚀 Залито",
+    "rework": "🔁 На доработку",
 }
 ACTION_TO_STATUS = {
     "accept": "accepted",
@@ -129,12 +140,17 @@ dp = Dispatcher()
 
 # ---------- тексты и кнопки ----------
 
+def note_line(item) -> str:
+    note = item["note"] if "note" in item.keys() else None
+    return f"\nПричина доработки: {html.escape(note)}" if note else ""
+
+
 def bug_card(bug) -> str:
     who = f" — {html.escape(bug['assignee'])}" if bug["assignee"] else ""
     return (
         f"🐞 <b>Баг #{bug['id']}</b>\n"
         f"{html.escape(bug['title'])}\n\n"
-        f"Статус: {STATUS_LABELS[bug['status']]}{who}"
+        f"Статус: {STATUS_LABELS[bug['status']]}{who}{note_line(bug)}"
     )
 
 
@@ -145,7 +161,9 @@ def bug_keyboard(bug_id: int, status: str):
             InlineKeyboardButton(text=BUTTON_LABELS[action], callback_data=f"bug:{bug_id}:{action}")
         ]])
     if status == "tested":
-        return None
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=BUTTON_LABELS["rework"], callback_data=f"bug:{bug_id}:rework")
+        ]])
     row = [
         InlineKeyboardButton(text=BUTTON_LABELS[a], callback_data=f"bug:{bug_id}:{a}")
         for a in ("accept", "work", "done")
@@ -188,6 +206,7 @@ FEATURE_BUTTONS = {
     "done": "✅ Сделал",
     "test": "🧪 Протестировал",
     "ship": "🚀 Залито",
+    "rework": "🔁 На доработку",
 }
 FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done", "test": "tested", "ship": "shipped"}
 FEATURE_NEXT_ACTIONS = {"done": "ship", "shipped": "test"}
@@ -198,7 +217,7 @@ def feature_card(f) -> str:
     return (
         f"💡 <b>Функционал #{f['id']}</b>\n"
         f"{html.escape(f['title'])}\n\n"
-        f"Статус: {FEATURE_STATUS[f['status']]}{who}"
+        f"Статус: {FEATURE_STATUS[f['status']]}{who}{note_line(f)}"
     )
 
 
@@ -209,12 +228,70 @@ def feature_keyboard(feature_id: int, status: str):
             InlineKeyboardButton(text=FEATURE_BUTTONS[action], callback_data=f"feat:{feature_id}:{action}")
         ]])
     if status == "tested":
-        return None
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=FEATURE_BUTTONS["rework"], callback_data=f"feat:{feature_id}:rework")
+        ]])
     row = [
         InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
         for a in ("accept", "work", "done")
     ]
     return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
+async def start_rework(cb: CallbackQuery, conn: asyncpg.Connection, kind: str, item_id: int):
+    await conn.execute(
+        """INSERT INTO pending_rework (user_id, kind, item_id, chat_id, thread_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (user_id) DO UPDATE
+           SET kind = $2, item_id = $3, chat_id = $4, thread_id = $5, created_at = $6""",
+        cb.from_user.id, kind, item_id, cb.message.chat.id, cb.message.message_thread_id, int(time.time()),
+    )
+    await cb.bot.send_message(
+        cb.message.chat.id,
+        "Напишите причину доработки одним сообщением.",
+        message_thread_id=cb.message.message_thread_id,
+    )
+    await cb.answer()
+
+
+async def try_rework_reason(message: Message, conn: asyncpg.Connection) -> bool:
+    # если бот ждёт причину доработки от этого пользователя, текст — это причина
+    text = message.text
+    if not text or text.startswith("/"):
+        return False
+    pending = await conn.fetchrow("SELECT * FROM pending_rework WHERE user_id = $1", message.from_user.id)
+    if pending is None:
+        return False
+    await conn.execute("DELETE FROM pending_rework WHERE user_id = $1", message.from_user.id)
+    if int(time.time()) - pending["created_at"] > PENDING_TTL_SECONDS:
+        return True
+
+    table = "bugs" if pending["kind"] == "bug" else "features"
+    reason = text.strip()
+    now = datetime.now(TZ).isoformat(timespec="minutes")
+    await conn.execute(
+        f"UPDATE {table} SET status = 'working', note = $1, updated_at = $2 WHERE id = $3",
+        reason, now, pending["item_id"],
+    )
+    item = await conn.fetchrow(f"SELECT * FROM {table} WHERE id = $1", pending["item_id"])
+    if pending["kind"] == "bug":
+        card, keyboard, label = bug_card(item), bug_keyboard(item["id"], "working"), "Баг"
+    else:
+        card, keyboard, label = feature_card(item), feature_keyboard(item["id"], "working"), "Функционал"
+
+    if item["bot_msg_id"]:
+        try:
+            await message.bot.edit_message_text(
+                card, chat_id=item["chat_id"], message_id=item["bot_msg_id"], reply_markup=keyboard
+            )
+        except TelegramBadRequest:
+            pass
+    await message.bot.send_message(
+        item["chat_id"],
+        f"🔁 {label} #{item['id']} возвращён на доработку.\nПричина: {html.escape(reason)}",
+        message_thread_id=pending["thread_id"],
+    )
+    return True
 
 
 async def post_tested(bot: Bot, item, kind: str):
@@ -445,6 +522,8 @@ async def on_button_all_features(message: Message, conn: asyncpg.Connection):
 async def on_new_feature(message: Message, conn: asyncpg.Connection):
     if message.text and message.text.startswith("/"):
         return
+    if await try_rework_reason(message, conn):
+        return
 
     pending = await conn.fetchrow(
         "SELECT * FROM pending_feature WHERE user_id = $1", message.from_user.id
@@ -469,7 +548,8 @@ async def on_new_feature(message: Message, conn: asyncpg.Connection):
         message.chat.id, message.message_thread_id, message.message_id, title, now,
     )
     feature = await conn.fetchrow("SELECT * FROM features WHERE id = $1", feature_id)
-    await message.reply(feature_card(feature), reply_markup=feature_keyboard(feature_id, "new"))
+    sent = await message.reply(feature_card(feature), reply_markup=feature_keyboard(feature_id, "new"))
+    await conn.execute("UPDATE features SET bot_msg_id = $1 WHERE id = $2", sent.message_id, feature_id)
 
 
 @dp.callback_query(F.data.startswith("feat:"))
@@ -478,6 +558,12 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
     feature = await conn.fetchrow("SELECT * FROM features WHERE id = $1", int(feature_id_s))
     if feature is None:
         await cb.answer("Функционал не найден", show_alert=True)
+        return
+    if action == "rework":
+        if feature["status"] != "tested":
+            await cb.answer("Доработка доступна после теста", show_alert=True)
+            return
+        await start_rework(cb, conn, "feature", feature["id"])
         return
     if feature["status"] in ("done", "tested", "shipped") and FEATURE_NEXT_ACTIONS.get(feature["status"]) != action:
         await cb.answer("Уже закрыто")
@@ -512,6 +598,8 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
 @dp.message(F.chat.id == GROUP_ID, F.message_thread_id != BUGS_THREAD_ID, F.text)
 async def on_name_query(message: Message, conn: asyncpg.Connection):
     if message.text.startswith("/"):
+        return
+    if await try_rework_reason(message, conn):
         return
     search = await conn.fetchrow(
         "SELECT * FROM pending_search WHERE user_id = $1", message.from_user.id
@@ -575,6 +663,8 @@ async def on_delete_bug(message: Message, conn: asyncpg.Connection):
 async def on_new_bug(message: Message, conn: asyncpg.Connection):
     if message.text and message.text.startswith("/"):
         return
+    if await try_rework_reason(message, conn):
+        return
 
     # баг создаём только если этот пользователь недавно нажал «➕ Новый баг»
     pending = await conn.fetchrow(
@@ -612,6 +702,12 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
     bug = await conn.fetchrow("SELECT * FROM bugs WHERE id = $1", int(bug_id_s))
     if bug is None:
         await cb.answer("Баг не найден", show_alert=True)
+        return
+    if action == "rework":
+        if bug["status"] != "tested":
+            await cb.answer("Доработка доступна после теста", show_alert=True)
+            return
+        await start_rework(cb, conn, "bug", bug["id"])
         return
     if bug["status"] in ("done", "tested", "shipped") and NEXT_ACTIONS.get(bug["status"]) != action:
         await cb.answer("Баг уже закрыт")
@@ -652,6 +748,10 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute(PENDING_SEARCH_SCHEMA)
     await conn.execute(FEATURES_SCHEMA)
     await conn.execute(PENDING_FEATURE_SCHEMA)
+    await conn.execute(PENDING_REWORK_SCHEMA)
+    await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS note TEXT")
+    await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS note TEXT")
+    await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS bot_msg_id BIGINT")
     return conn
 
 

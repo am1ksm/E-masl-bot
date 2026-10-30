@@ -32,6 +32,7 @@ from aiogram.types import (
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROUP_ID = int(os.environ["GROUP_ID"])
 BUGS_THREAD_ID = int(os.environ["BUGS_THREAD_ID"])
+FEATURES_THREAD_ID = int(os.environ.get("FEATURES_THREAD_ID") or 0)  # тема «Функционал», 0 = выключено
 REPORT_THREAD_ID = int(os.environ.get("REPORT_THREAD_ID") or BUGS_THREAD_ID)
 DATABASE_URL = os.environ["DATABASE_URL"]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -66,6 +67,27 @@ CREATE TABLE IF NOT EXISTS pending_bug (
 """
 PENDING_SEARCH_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pending_search (
+    user_id BIGINT PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    thread_id BIGINT,
+    created_at BIGINT NOT NULL
+)
+"""
+FEATURES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS features (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id BIGINT NOT NULL,
+    thread_id BIGINT,
+    source_msg_id BIGINT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    assignee TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+PENDING_FEATURE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS pending_feature (
     user_id BIGINT PRIMARY KEY,
     chat_id BIGINT NOT NULL,
     thread_id BIGINT,
@@ -123,6 +145,43 @@ def main_keyboard():
             [KeyboardButton(text="📋 Все баги"), KeyboardButton(text="🕑 Только открытые")],
             [KeyboardButton(text="✍️ Напишите имя"), KeyboardButton(text="🗑 Удалить баг")],
         ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+FEATURE_STATUS = {
+    "new": "🆕 Новый",
+    "accepted": "✋ Принял",
+    "working": "🔧 В процессе",
+    "done": "✅ Сделал",
+}
+FEATURE_BUTTONS = {"accept": "✋ Принял", "work": "🔧 В процессе", "done": "✅ Сделал"}
+FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done"}
+
+
+def feature_card(f) -> str:
+    who = f" — {html.escape(f['assignee'])}" if f["assignee"] else ""
+    return (
+        f"💡 <b>Функционал #{f['id']}</b>\n"
+        f"{html.escape(f['title'])}\n\n"
+        f"Статус: {FEATURE_STATUS[f['status']]}{who}"
+    )
+
+
+def feature_keyboard(feature_id: int, status: str):
+    if status == "done":
+        return None
+    row = [
+        InlineKeyboardButton(text=FEATURE_BUTTONS[a], callback_data=f"feat:{feature_id}:{a}")
+        for a in ("accept", "work", "done")
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[row])
+
+
+def features_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="➕ Добавить функционал")]],
         resize_keyboard=True,
         is_persistent=True,
     )
@@ -223,7 +282,9 @@ async def on_start(message: Message):
         "Кнопки включены: используйте их внизу чата.",
         message_thread_id=message.message_thread_id,
         reply_markup=(
-            main_keyboard() if message.message_thread_id == BUGS_THREAD_ID else search_keyboard()
+            main_keyboard() if message.message_thread_id == BUGS_THREAD_ID
+            else features_keyboard() if message.message_thread_id == FEATURES_THREAD_ID
+            else search_keyboard()
         ),
     )
 
@@ -268,6 +329,90 @@ async def on_button_ask_name(message: Message, conn: asyncpg.Connection):
         message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
     )
     await message.reply("Напишите фамилию, имя или отчество депутата или сотрудника.")
+
+
+@dp.message(F.chat.id == GROUP_ID, F.message_thread_id == FEATURES_THREAD_ID, F.text == "➕ Добавить функционал")
+async def on_button_add_feature(message: Message, conn: asyncpg.Connection):
+    await conn.execute(
+        """INSERT INTO pending_feature (user_id, chat_id, thread_id, created_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (user_id) DO UPDATE SET chat_id = $2, thread_id = $3, created_at = $4""",
+        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
+    )
+    await message.reply(
+        "Отправьте описание и фото функционала, по одному сообщению на пункт. "
+        "Режим выключится через 10 минут без новых."
+    )
+
+
+@dp.message(
+    F.chat.id == GROUP_ID,
+    F.message_thread_id == FEATURES_THREAD_ID,
+    F.text | F.photo | F.document,
+)
+async def on_new_feature(message: Message, conn: asyncpg.Connection):
+    if message.text and message.text.startswith("/"):
+        return
+
+    pending = await conn.fetchrow(
+        "SELECT * FROM pending_feature WHERE user_id = $1", message.from_user.id
+    )
+    if pending is None or int(time.time()) - pending["created_at"] > PENDING_TTL_SECONDS:
+        if pending is not None:
+            await conn.execute("DELETE FROM pending_feature WHERE user_id = $1", message.from_user.id)
+        return
+
+    # режим продлевается после каждого добавленного пункта
+    await conn.execute(
+        "UPDATE pending_feature SET created_at = $1 WHERE user_id = $2",
+        int(time.time()), message.from_user.id,
+    )
+
+    raw = (message.text or message.caption or "").strip()
+    title = raw.splitlines()[0][:200] if raw else "Без описания"
+    now = datetime.now(TZ).isoformat(timespec="minutes")
+    feature_id = await conn.fetchval(
+        """INSERT INTO features (chat_id, thread_id, source_msg_id, title, status, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'new', $5, $5) RETURNING id""",
+        message.chat.id, message.message_thread_id, message.message_id, title, now,
+    )
+    feature = await conn.fetchrow("SELECT * FROM features WHERE id = $1", feature_id)
+    await message.reply(feature_card(feature), reply_markup=feature_keyboard(feature_id, "new"))
+
+
+@dp.callback_query(F.data.startswith("feat:"))
+async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
+    _, feature_id_s, action = cb.data.split(":")
+    feature = await conn.fetchrow("SELECT * FROM features WHERE id = $1", int(feature_id_s))
+    if feature is None:
+        await cb.answer("Функционал не найден", show_alert=True)
+        return
+    if feature["status"] == "done":
+        await cb.answer("Уже сделано")
+        return
+
+    name = user_name(cb.from_user)
+    new_status = FEATURE_ACTIONS[action]
+    if action in ("accept", "work") or not feature["assignee"]:
+        assignee = name
+    else:
+        assignee = feature["assignee"]
+
+    now = datetime.now(TZ).isoformat(timespec="minutes")
+    await conn.execute(
+        "UPDATE features SET status = $1, assignee = $2, updated_at = $3 WHERE id = $4",
+        new_status, assignee, now, feature["id"],
+    )
+    feature = await conn.fetchrow("SELECT * FROM features WHERE id = $1", feature["id"])
+    try:
+        await cb.message.edit_text(
+            feature_card(feature),
+            reply_markup=feature_keyboard(feature["id"], feature["status"]),
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+    await cb.answer(FEATURE_STATUS[new_status])
 
 
 @dp.message(F.chat.id == GROUP_ID, F.message_thread_id != BUGS_THREAD_ID, F.text)
@@ -409,6 +554,8 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute(SCHEMA)
     await conn.execute(PENDING_SCHEMA)
     await conn.execute(PENDING_SEARCH_SCHEMA)
+    await conn.execute(FEATURES_SCHEMA)
+    await conn.execute(PENDING_FEATURE_SCHEMA)
     return conn
 
 

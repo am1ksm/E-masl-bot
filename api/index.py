@@ -199,7 +199,7 @@ def main_keyboard():
         keyboard=[
             [KeyboardButton(text="➕ Новый баг")],
             [KeyboardButton(text="📋 Все баги"), KeyboardButton(text="🕑 Только открытые")],
-            [KeyboardButton(text="✍️ Напишите имя"), KeyboardButton(text="🗑 Удалить баг")],
+            [KeyboardButton(text="🗑 Удалить баг")],
         ],
         resize_keyboard=True,
         is_persistent=True,

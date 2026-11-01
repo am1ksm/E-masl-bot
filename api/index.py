@@ -425,13 +425,7 @@ async def on_bugs_command(message: Message, conn: asyncpg.Connection):
     # «/bugs» — только открытые, «/bugs all» — все, включая сделанные
     parts = (message.text or "").split()
     include_done = len(parts) > 1 and parts[1].lower() == "all"
-    rows = await fetch_bugs(conn, include_done=include_done)
-    await message.bot.send_message(
-        message.chat.id,
-        build_summary(rows, include_done=include_done),
-        message_thread_id=message.message_thread_id,
-        reply_markup=list_keyboard(include_done),
-    )
+    await send_list(message, conn, include_done=include_done)
 
 
 @dp.callback_query(F.data.startswith("list:"))
@@ -472,16 +466,31 @@ async def on_start(message: Message):
     )
 
 
-@dp.message(F.chat.id == GROUP_ID, F.text.in_({"📋 Все баги", "🕑 Только открытые"}))
-async def on_button_list(message: Message, conn: asyncpg.Connection):
-    include_done = message.text == "📋 Все баги"
+async def send_list(message: Message, conn: asyncpg.Connection, include_done: bool):
+    # предыдущий список удаляем, когда запрашивают новый
     rows = await fetch_bugs(conn, include_done=include_done)
-    await message.bot.send_message(
+    prev_id = await conn.fetchval("SELECT value FROM bot_state WHERE key = 'list_msg_id'")
+    if prev_id:
+        try:
+            await message.bot.delete_message(message.chat.id, prev_id)
+        except TelegramBadRequest:
+            pass
+    sent = await message.bot.send_message(
         message.chat.id,
         build_summary(rows, include_done=include_done),
         message_thread_id=message.message_thread_id,
         reply_markup=list_keyboard(include_done),
     )
+    await conn.execute(
+        """INSERT INTO bot_state (key, value) VALUES ('list_msg_id', $1)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+        sent.message_id,
+    )
+
+
+@dp.message(F.chat.id == GROUP_ID, F.text.in_({"📋 Все баги", "🕑 Только открытые"}))
+async def on_button_list(message: Message, conn: asyncpg.Connection):
+    await send_list(message, conn, include_done=message.text == "📋 Все баги")
 
 
 async def find_contacts_text(conn: asyncpg.Connection, query: str) -> str:

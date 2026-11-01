@@ -885,6 +885,7 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute("ALTER TABLE pending_bug ADD COLUMN IF NOT EXISTS button_msg_id BIGINT")
     await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS posted_tested BOOLEAN NOT NULL DEFAULT FALSE")
     await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS posted_tested BOOLEAN NOT NULL DEFAULT FALSE")
+    await conn.execute("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value BIGINT)")
     return conn
 
 
@@ -992,11 +993,23 @@ async def handle_summary(headers: dict) -> int:
             )
         else:
             open_rows = await fetch_bugs(conn)
-            await bot.send_message(
+            # предыдущее напоминание удаляем, когда приходит новое
+            prev_id = await conn.fetchval("SELECT value FROM bot_state WHERE key = 'reminder_msg_id'")
+            if prev_id:
+                try:
+                    await bot.delete_message(GROUP_ID, prev_id)
+                except TelegramBadRequest:
+                    pass
+            sent = await bot.send_message(
                 GROUP_ID,
                 build_reminder(open_rows, done_bugs),
                 message_thread_id=REPORT_THREAD_ID,
                 reply_markup=list_keyboard(False),
+            )
+            await conn.execute(
+                """INSERT INTO bot_state (key, value) VALUES ('reminder_msg_id', $1)
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+                sent.message_id,
             )
     finally:
         await conn.close()

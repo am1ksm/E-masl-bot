@@ -525,15 +525,17 @@ async def on_button_ask_name(message: Message, conn: asyncpg.Connection):
 
 @dp.message(F.chat.id == GROUP_ID, F.message_thread_id == FEATURES_THREAD_ID, F.text == "➕ Добавить функционал")
 async def on_button_add_feature(message: Message, conn: asyncpg.Connection):
-    await conn.execute(
-        """INSERT INTO pending_feature (user_id, chat_id, thread_id, created_at)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (user_id) DO UPDATE SET chat_id = $2, thread_id = $3, created_at = $4""",
-        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
-    )
-    await message.reply(
+    prompt = await message.reply(
         "Отправьте описание и фото функционала, по одному сообщению на пункт. "
         "Режим выключится через 10 минут без новых."
+    )
+    await conn.execute(
+        """INSERT INTO pending_feature (user_id, chat_id, thread_id, created_at, prompt_msg_id, button_msg_id)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (user_id) DO UPDATE
+           SET chat_id = $2, thread_id = $3, created_at = $4, prompt_msg_id = $5, button_msg_id = $6""",
+        message.from_user.id, message.chat.id, message.message_thread_id, int(time.time()),
+        prompt.message_id, message.message_id,
     )
 
 
@@ -610,6 +612,18 @@ async def on_new_feature(message: Message, conn: asyncpg.Connection):
     feature = await conn.fetchrow("SELECT * FROM features WHERE id = $1", feature_id)
     sent = await message.reply(feature_card(feature), reply_markup=feature_keyboard(feature_id, "new"))
     await conn.execute("UPDATE features SET bot_msg_id = $1 WHERE id = $2", sent.message_id, feature_id)
+
+    # после первого пункта удаляем служебные сообщения: подсказку бота и нажатую кнопку
+    for mid in (pending["prompt_msg_id"], pending["button_msg_id"]):
+        if mid:
+            try:
+                await message.bot.delete_message(message.chat.id, mid)
+            except TelegramBadRequest:
+                pass
+    await conn.execute(
+        "UPDATE pending_feature SET prompt_msg_id = NULL, button_msg_id = NULL WHERE user_id = $1",
+        message.from_user.id,
+    )
 
 
 @dp.callback_query(F.data.startswith("feat:"))
@@ -895,6 +909,8 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS posted_tested BOOLEAN NOT NULL DEFAULT FALSE")
     await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS posted_tested BOOLEAN NOT NULL DEFAULT FALSE")
     await conn.execute("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value BIGINT)")
+    await conn.execute("ALTER TABLE pending_feature ADD COLUMN IF NOT EXISTS prompt_msg_id BIGINT")
+    await conn.execute("ALTER TABLE pending_feature ADD COLUMN IF NOT EXISTS button_msg_id BIGINT")
     return conn
 
 

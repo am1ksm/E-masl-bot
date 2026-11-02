@@ -156,11 +156,50 @@ def note_line(item) -> str:
     return f"\nПричина доработки: {html.escape(note)}" if note else ""
 
 
+PRIORITY_LABELS = {
+    "crit": "🔴 Критичный",
+    "high": "🟠 Высокий",
+    "mid": "🟡 Средний",
+    "low": "🟢 Низкий",
+}
+
+
+def priority_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=PRIORITY_LABELS["crit"], callback_data="prio:crit"),
+            InlineKeyboardButton(text=PRIORITY_LABELS["high"], callback_data="prio:high"),
+        ],
+        [
+            InlineKeyboardButton(text=PRIORITY_LABELS["mid"], callback_data="prio:mid"),
+            InlineKeyboardButton(text=PRIORITY_LABELS["low"], callback_data="prio:low"),
+        ],
+    ])
+
+
+async def ask_priority(message: Message, conn: asyncpg.Connection, kind: str, title: str,
+                       prompt_msg_id, button_msg_id):
+    # задачу создаём только после выбора приоритета; всё нужное для создания сохраняем здесь
+    what = "бага" if kind == "bug" else "функционала"
+    question = await message.reply(f"Выберите приоритет для {what}:", reply_markup=priority_keyboard())
+    await conn.execute(
+        """INSERT INTO pending_priority (user_id, kind, chat_id, thread_id, source_msg_id, title, created_at,
+                                         prompt_msg_id, button_msg_id, question_msg_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (user_id) DO UPDATE
+           SET kind = $2, chat_id = $3, thread_id = $4, source_msg_id = $5, title = $6, created_at = $7,
+               prompt_msg_id = $8, button_msg_id = $9, question_msg_id = $10""",
+        message.from_user.id, kind, message.chat.id, message.message_thread_id, message.message_id,
+        title, int(time.time()), prompt_msg_id, button_msg_id, question.message_id,
+    )
+
+
 def bug_card(bug) -> str:
     who = f" — {html.escape(bug['assignee'])}" if bug["assignee"] else ""
     return (
         f"🐞 <b>Баг #{bug['id']}</b>\n"
-        f"{html.escape(bug['title'])}\n\n"
+        f"{html.escape(bug['title'])}\n"
+        f"Приоритет: {PRIORITY_LABELS.get(bug['priority'], '—')}\n\n"
         f"Статус: {STATUS_LABELS[bug['status']]}{who}{note_line(bug)}"
     )
 
@@ -231,7 +270,8 @@ def feature_card(f) -> str:
     who = f" — {html.escape(f['assignee'])}" if f["assignee"] else ""
     return (
         f"💡 <b>Функционал #{f['id']}</b>\n"
-        f"{html.escape(f['title'])}\n\n"
+        f"{html.escape(f['title'])}\n"
+        f"Приоритет: {PRIORITY_LABELS.get(f['priority'], '—')}\n\n"
         f"Статус: {FEATURE_STATUS[f['status']]}{who}{note_line(f)}"
     )
 
@@ -609,23 +649,8 @@ async def on_new_feature(message: Message, conn: asyncpg.Connection):
 
     raw = (message.text or message.caption or "").strip()
     title = raw.splitlines()[0][:200] if raw else "Без описания"
-    now = datetime.now(TZ).isoformat(timespec="minutes")
-    feature_id = await conn.fetchval(
-        """INSERT INTO features (chat_id, thread_id, source_msg_id, title, status, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 'new', $5, $5) RETURNING id""",
-        message.chat.id, message.message_thread_id, message.message_id, title, now,
-    )
-    feature = await conn.fetchrow("SELECT * FROM features WHERE id = $1", feature_id)
-    sent = await message.reply(feature_card(feature), reply_markup=feature_keyboard(feature_id, "new"))
-    await conn.execute("UPDATE features SET bot_msg_id = $1 WHERE id = $2", sent.message_id, feature_id)
-
-    # после первого пункта удаляем служебные сообщения: подсказку бота и нажатую кнопку
-    for mid in (pending["prompt_msg_id"], pending["button_msg_id"]):
-        if mid:
-            try:
-                await message.bot.delete_message(message.chat.id, mid)
-            except TelegramBadRequest:
-                pass
+    await ask_priority(message, conn, "feat", title, pending["prompt_msg_id"], pending["button_msg_id"])
+    # служебные сообщения этого пункта теперь удаляет выбор приоритета
     await conn.execute(
         "UPDATE pending_feature SET prompt_msg_id = NULL, button_msg_id = NULL WHERE user_id = $1",
         message.from_user.id,
@@ -788,31 +813,11 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
             await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
         return
     # одна попытка на одно нажатие «➕ Новый баг»: режим закрывается сразу после бага
-    service_msg_ids = [pending["prompt_msg_id"], pending["button_msg_id"]]
     await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
 
     raw = (message.text or message.caption or "").strip()
     title = raw.splitlines()[0][:120] if raw else "Скриншот без описания"
-    now = datetime.now(TZ).isoformat(timespec="minutes")
-
-    bug_id = await conn.fetchval(
-        """INSERT INTO bugs (chat_id, thread_id, source_msg_id, title, status, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 'new', $5, $5) RETURNING id""",
-        message.chat.id, message.message_thread_id, message.message_id, title, now,
-    )
-    bug = await conn.fetchrow("SELECT * FROM bugs WHERE id = $1", bug_id)
-
-    sent = await message.reply(bug_card(bug), reply_markup=bug_keyboard(bug_id, "new"))
-    await conn.execute("UPDATE bugs SET bot_msg_id = $1 WHERE id = $2", sent.message_id, bug_id)
-    log.info("Создан баг #%s", bug_id)
-
-    # убираем только служебные сообщения самого пользователя и бота, сообщения других участников не трогаем
-    for mid in service_msg_ids:
-        if mid:
-            try:
-                await message.bot.delete_message(message.chat.id, mid)
-            except TelegramBadRequest:
-                pass
+    await ask_priority(message, conn, "bug", title, pending["prompt_msg_id"], pending["button_msg_id"])
 
 
 @dp.callback_query(F.data.startswith("bug:"))
@@ -896,6 +901,51 @@ async def on_ship_from_tested(cb: CallbackQuery, conn: asyncpg.Connection):
     await cb.answer("🚀 Залито")
 
 
+@dp.callback_query(F.data.startswith("prio:"))
+async def on_priority(cb: CallbackQuery, conn: asyncpg.Connection):
+    code = cb.data.split(":")[1]
+    p = await conn.fetchrow("SELECT * FROM pending_priority WHERE user_id = $1", cb.from_user.id)
+    if p is not None:
+        await conn.execute("DELETE FROM pending_priority WHERE user_id = $1", cb.from_user.id)
+    if p is None or code not in PRIORITY_LABELS or int(time.time()) - p["created_at"] > PENDING_TTL_SECONDS:
+        await cb.answer("Время вышло. Отправьте задачу заново.", show_alert=True)
+        try:
+            await cb.message.delete()
+        except TelegramBadRequest:
+            pass
+        return
+
+    kind = p["kind"]
+    table = "bugs" if kind == "bug" else "features"
+    now = datetime.now(TZ).isoformat(timespec="minutes")
+    item_id = await conn.fetchval(
+        f"""INSERT INTO {table} (chat_id, thread_id, source_msg_id, title, status, created_at, updated_at, priority)
+           VALUES ($1, $2, $3, $4, 'new', $5, $5, $6) RETURNING id""",
+        p["chat_id"], p["thread_id"], p["source_msg_id"], p["title"], now, code,
+    )
+    item = await conn.fetchrow(f"SELECT * FROM {table} WHERE id = $1", item_id)
+    if kind == "bug":
+        text, markup = bug_card(item), bug_keyboard(item_id, "new")
+    else:
+        text, markup = feature_card(item), feature_keyboard(item_id, "new")
+    sent = await cb.bot.send_message(
+        p["chat_id"], text,
+        message_thread_id=p["thread_id"],
+        reply_to_message_id=p["source_msg_id"],
+        reply_markup=markup,
+    )
+    await conn.execute(f"UPDATE {table} SET bot_msg_id = $1 WHERE id = $2", sent.message_id, item_id)
+
+    # служебные сообщения: вопрос о приоритете, подсказка бота и нажатая кнопка
+    for mid in (cb.message.message_id, p["prompt_msg_id"], p["button_msg_id"]):
+        if mid:
+            try:
+                await cb.bot.delete_message(p["chat_id"], mid)
+            except TelegramBadRequest:
+                pass
+    await cb.answer(PRIORITY_LABELS[code])
+
+
 # ---------- HTTP-обработчики ----------
 
 async def connect_db() -> asyncpg.Connection:
@@ -917,6 +967,12 @@ async def connect_db() -> asyncpg.Connection:
     await conn.execute("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value BIGINT)")
     await conn.execute("ALTER TABLE pending_feature ADD COLUMN IF NOT EXISTS prompt_msg_id BIGINT")
     await conn.execute("ALTER TABLE pending_feature ADD COLUMN IF NOT EXISTS button_msg_id BIGINT")
+    await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS priority TEXT")
+    await conn.execute("ALTER TABLE features ADD COLUMN IF NOT EXISTS priority TEXT")
+    await conn.execute("""CREATE TABLE IF NOT EXISTS pending_priority (
+        user_id BIGINT PRIMARY KEY, kind TEXT NOT NULL, chat_id BIGINT NOT NULL, thread_id BIGINT,
+        source_msg_id BIGINT, title TEXT, created_at BIGINT NOT NULL,
+        prompt_msg_id BIGINT, button_msg_id BIGINT, question_msg_id BIGINT)""")
     return conn
 
 

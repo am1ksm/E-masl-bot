@@ -524,7 +524,7 @@ async def on_start(message: Message):
         ],
         scope=BotCommandScopeChat(chat_id=GROUP_ID),
     )
-    sent = await message.bot.send_message(
+    await message.bot.send_message(
         message.chat.id,
         "Кнопки включены: используйте их внизу чата.",
         message_thread_id=message.message_thread_id,
@@ -534,12 +534,11 @@ async def on_start(message: Message):
             else search_keyboard()
         ),
     )
-    # служебные сообщения не нужны в чате: удаляем и команду, и подтверждение
-    for mid in (message.message_id, sent.message_id):
-        try:
-            await message.bot.delete_message(message.chat.id, mid)
-        except TelegramBadRequest:
-            pass
+    # команду убираем, а подтверждение с клавиатурой оставляем: без него кнопки пропадают
+    try:
+        await message.bot.delete_message(message.chat.id, message.message_id)
+    except TelegramBadRequest:
+        pass
 
 
 async def send_list(message: Message, conn: asyncpg.Connection, include_done: bool):

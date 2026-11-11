@@ -184,21 +184,44 @@ async def ask_priority(message: Message, conn: asyncpg.Connection, kind: str, ti
     question = await message.reply(f"Выберите приоритет для {what}:", reply_markup=priority_keyboard())
     await conn.execute(
         """INSERT INTO pending_priority (user_id, kind, chat_id, thread_id, source_msg_id, title, created_at,
-                                         prompt_msg_id, button_msg_id, question_msg_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                         prompt_msg_id, button_msg_id, question_msg_id, author_name)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (user_id) DO UPDATE
            SET kind = $2, chat_id = $3, thread_id = $4, source_msg_id = $5, title = $6, created_at = $7,
-               prompt_msg_id = $8, button_msg_id = $9, question_msg_id = $10""",
+               prompt_msg_id = $8, button_msg_id = $9, question_msg_id = $10, author_name = $11""",
         message.from_user.id, kind, message.chat.id, message.message_thread_id, message.message_id,
-        title, int(time.time()), prompt_msg_id, button_msg_id, question.message_id,
+        title, int(time.time()), prompt_msg_id, button_msg_id, question.message_id, user_name(message.from_user),
     )
+
+
+def read_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Прочитано", callback_data="read")
+    ]])
+
+
+async def notify_bug(bot: Bot, bug, text: str, user_id: int, name: str):
+    # ответ под карточкой с упоминанием человека: уведомление придёт только ему
+    mention = f'<a href="tg://user?id={user_id}">{html.escape(name or "участник")}</a>'
+    await bot.send_message(
+        bug["chat_id"],
+        f"{mention}, {text}",
+        message_thread_id=bug["thread_id"],
+        reply_to_message_id=bug["bot_msg_id"],
+        reply_markup=read_keyboard(),
+    )
+
+
+async def notify_shipped(bot: Bot, bug):
+    if bug["created_by"]:
+        await notify_bug(bot, bug, f"баг #{bug['id']} залито.", bug["created_by"], bug["created_by_name"])
 
 
 def bug_card(bug) -> str:
     who = f" — {html.escape(bug['assignee'])}" if bug["assignee"] else ""
     return (
         f"🐞 <b>Баг #{bug['id']}</b>\n"
-        f"{html.escape(bug['title'])}\n"
+        f"{html.escape(bug['title'])}\n\n"
         f"Приоритет: {PRIORITY_LABELS.get(bug['priority'], '—')}\n\n"
         f"Статус: {STATUS_LABELS[bug['status']]}{who}{note_line(bug)}"
     )
@@ -344,11 +367,18 @@ async def try_rework_reason(message: Message, conn: asyncpg.Connection) -> bool:
             )
         except TelegramBadRequest:
             pass
-    await message.bot.send_message(
-        item["chat_id"],
-        f"🔁 {label} #{item['id']} возвращён на доработку.\nПричина: {html.escape(reason)}",
-        message_thread_id=pending["thread_id"],
-    )
+    if pending["kind"] == "bug" and item["ship_by"]:
+        await notify_bug(
+            message.bot, item,
+            f"баг #{item['id']} возвращён на доработку. Причина: {html.escape(reason)}",
+            item["ship_by"], item["ship_by_name"],
+        )
+    else:
+        await message.bot.send_message(
+            item["chat_id"],
+            f"🔁 {label} #{item['id']} возвращён на доработку.\nПричина: {html.escape(reason)}",
+            message_thread_id=pending["thread_id"],
+        )
     return True
 
 
@@ -852,6 +882,13 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
         new_status, assignee, now, bug["id"],
     )
     bug = await conn.fetchrow("SELECT * FROM bugs WHERE id = $1", bug["id"])
+    if new_status == "shipped":
+        await conn.execute(
+            "UPDATE bugs SET ship_by = $1, ship_by_name = $2 WHERE id = $3",
+            cb.from_user.id, user_name(cb.from_user), bug["id"],
+        )
+        bug = await conn.fetchrow("SELECT * FROM bugs WHERE id = $1", bug["id"])
+        await notify_shipped(cb.bot, bug)
 
     try:
         await cb.message.edit_text(bug_card(bug), reply_markup=bug_keyboard(bug["id"], bug["status"]))
@@ -877,6 +914,12 @@ async def on_ship_from_tested(cb: CallbackQuery, conn: asyncpg.Connection):
 
     now = datetime.now(TZ).isoformat(timespec="minutes")
     await conn.execute(f"UPDATE {table} SET status = 'shipped', updated_at = $1 WHERE id = $2", now, item["id"])
+    if kind == "bug":
+        await conn.execute(
+            "UPDATE bugs SET ship_by = $1, ship_by_name = $2 WHERE id = $3",
+            cb.from_user.id, user_name(cb.from_user), item["id"],
+        )
+        await notify_shipped(cb.bot, await conn.fetchrow("SELECT * FROM bugs WHERE id = $1", item["id"]))
     label = "Баг" if kind == "bug" else "Функционал"
     try:
         await cb.message.edit_text(
@@ -918,11 +961,20 @@ async def on_priority(cb: CallbackQuery, conn: asyncpg.Connection):
     kind = p["kind"]
     table = "bugs" if kind == "bug" else "features"
     now = datetime.now(TZ).isoformat(timespec="minutes")
-    item_id = await conn.fetchval(
-        f"""INSERT INTO {table} (chat_id, thread_id, source_msg_id, title, status, created_at, updated_at, priority)
-           VALUES ($1, $2, $3, $4, 'new', $5, $5, $6) RETURNING id""",
-        p["chat_id"], p["thread_id"], p["source_msg_id"], p["title"], now, code,
-    )
+    if kind == "bug":
+        item_id = await conn.fetchval(
+            """INSERT INTO bugs (chat_id, thread_id, source_msg_id, title, status, created_at, updated_at,
+                                 priority, created_by, created_by_name)
+               VALUES ($1, $2, $3, $4, 'new', $5, $5, $6, $7, $8) RETURNING id""",
+            p["chat_id"], p["thread_id"], p["source_msg_id"], p["title"], now, code,
+            p["user_id"], p["author_name"],
+        )
+    else:
+        item_id = await conn.fetchval(
+            """INSERT INTO features (chat_id, thread_id, source_msg_id, title, status, created_at, updated_at, priority)
+               VALUES ($1, $2, $3, $4, 'new', $5, $5, $6) RETURNING id""",
+            p["chat_id"], p["thread_id"], p["source_msg_id"], p["title"], now, code,
+        )
     item = await conn.fetchrow(f"SELECT * FROM {table} WHERE id = $1", item_id)
     if kind == "bug":
         text, markup = bug_card(item), bug_keyboard(item_id, "new")
@@ -944,6 +996,15 @@ async def on_priority(cb: CallbackQuery, conn: asyncpg.Connection):
             except TelegramBadRequest:
                 pass
     await cb.answer(PRIORITY_LABELS[code])
+
+
+@dp.callback_query(F.data == "read")
+async def on_read(cb: CallbackQuery):
+    try:
+        await cb.message.delete()
+    except TelegramBadRequest:
+        pass
+    await cb.answer()
 
 
 # ---------- HTTP-обработчики ----------
@@ -973,6 +1034,11 @@ async def connect_db() -> asyncpg.Connection:
         user_id BIGINT PRIMARY KEY, kind TEXT NOT NULL, chat_id BIGINT NOT NULL, thread_id BIGINT,
         source_msg_id BIGINT, title TEXT, created_at BIGINT NOT NULL,
         prompt_msg_id BIGINT, button_msg_id BIGINT, question_msg_id BIGINT)""")
+    await conn.execute("ALTER TABLE pending_priority ADD COLUMN IF NOT EXISTS author_name TEXT")
+    await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS created_by BIGINT")
+    await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS created_by_name TEXT")
+    await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS ship_by BIGINT")
+    await conn.execute("ALTER TABLE bugs ADD COLUMN IF NOT EXISTS ship_by_name TEXT")
     return conn
 
 

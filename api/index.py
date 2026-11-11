@@ -470,7 +470,7 @@ def build_summary(rows, include_done: bool = False) -> str:
             continue
         lines.append(f"\n<b>{title} ({len(items)})</b>")
         for b in items:
-            who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
+            who = f"\nОтветственный: {html.escape(b['assignee'])}" if b["assignee"] else ""
             link = source_link(b)
             lines.append(f'<a href="{link}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
     if include_done:
@@ -1076,13 +1076,13 @@ def build_reminder(open_rows, done_rows) -> str:
             continue
         lines.append(f"\n<b>{title} ({len(items)})</b>")
         for b in items:
-            who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
+            who = f"\nОтветственный: {html.escape(b['assignee'])}" if b["assignee"] else ""
             lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
 
     if done_rows:
         lines.append(f"\n<b>✅ Сделано сегодня ({len(done_rows)})</b>")
         for b in done_rows:
-            who = f" — {html.escape(b['assignee'])}" if b["assignee"] else ""
+            who = f"\nОтветственный: {html.escape(b['assignee'])}" if b["assignee"] else ""
             lines.append(f'<a href="{source_link(b)}">#{b["id"]}</a> {html.escape(b["title"])}{who}' + "\n")
 
     lines.append(f"\nОткрыто: {len(open_rows)}")
@@ -1115,7 +1115,7 @@ def build_day_result(bugs_done, features_done) -> str:
                 continue
             lines.append(f"\n<b>{labels[key]} ({len(group)})</b>")
             for i in group:
-                who = f" — {html.escape(i['assignee'])}" if i["assignee"] else ""
+                who = f"\nОтветственный: {html.escape(i['assignee'])}" if i["assignee"] else ""
                 lines.append(
                     f'<a href="{source_link(i)}">#{i["id"]}</a> {html.escape(i["title"])}{who}' + "\n"
                 )

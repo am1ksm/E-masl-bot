@@ -126,14 +126,14 @@ STATUS_LABELS = {
     "done": "✅ Сделал",
     "tested": "🚀 Готово на прод",
     "rework": "🔁 На доработке",
-    "shipped": "🚀 Залито",
+    "shipped": "🚀 Залито на тест",
 }
 BUTTON_LABELS = {
     "accept": "✋ Принял",
     "work": "🔧 Делаю",
     "done": "✅ Сделал",
     "test": "🧪 Протестировано",
-    "ship": "🚀 Залито",
+    "ship": "🚀 Залито на тест",
     "rework": "🔁 На доработку",
 }
 ACTION_TO_STATUS = {
@@ -214,7 +214,7 @@ async def notify_bug(bot: Bot, bug, text: str, user_id: int, name: str):
 
 async def notify_shipped(bot: Bot, bug):
     if bug["created_by"]:
-        await notify_bug(bot, bug, f"баг #{bug['id']} залито.", bug["created_by"], bug["created_by_name"])
+        await notify_bug(bot, bug, f"баг #{bug['id']} залито на тест.", bug["created_by"], bug["created_by_name"])
 
 
 def bug_card(bug) -> str:
@@ -275,14 +275,14 @@ FEATURE_STATUS = {
     "done": "✅ Сделал",
     "tested": "🚀 Готово на прод",
     "rework": "🔁 На доработке",
-    "shipped": "🚀 Залито",
+    "shipped": "🚀 Залито на тест",
 }
 FEATURE_BUTTONS = {
     "accept": "✋ Принял",
     "work": "🔧 В процессе",
     "done": "✅ Сделал",
     "test": "🧪 Протестировано",
-    "ship": "🚀 Залито",
+    "ship": "🚀 Залито на тест",
     "rework": "🔁 На доработку",
 }
 FEATURE_ACTIONS = {"accept": "accepted", "work": "working", "done": "done", "test": "tested", "ship": "shipped"}
@@ -393,7 +393,7 @@ async def post_tested(bot: Bot, conn, item, kind: str, table: str):
         f'<a href="{link}">Открыть исходное сообщение</a>',
         message_thread_id=TESTED_THREAD_ID,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🚀 Залито", callback_data=f"ship:{'bug' if table == 'bugs' else 'feat'}:{item['id']}")
+            InlineKeyboardButton(text="🚀 Залито на тест", callback_data=f"ship:{'bug' if table == 'bugs' else 'feat'}:{item['id']}")
         ]]),
     )
     await conn.execute(f"UPDATE {table} SET posted_tested = TRUE WHERE id = $1", item["id"])
@@ -461,7 +461,7 @@ def build_summary(rows, include_done: bool = False) -> str:
     ]
     if include_done:
         sections.append(("done", "✅ Сделанные"))
-        sections.append(("shipped", "🚀 Залито"))
+        sections.append(("shipped", "🚀 Залито на тест"))
         sections.append(("tested", "🧪 Протестированные"))
     lines = [head]
     for key, title in sections:
@@ -623,7 +623,7 @@ def build_features_list(rows) -> str:
         ("working", "🔧 В процессе"),
         ("rework", "🔁 На доработке"),
         ("done", "✅ Сделанные"),
-        ("shipped", "🚀 Залито"),
+        ("shipped", "🚀 Залито на тест"),
         ("tested", "🧪 Протестированные"),
     ]
     lines = [f"💡 <b>Все функционалы ({len(rows)})</b>"]
@@ -695,7 +695,7 @@ async def on_feature_status(cb: CallbackQuery, conn: asyncpg.Connection):
         return
     if action == "rework":
         if feature["status"] != "shipped":
-            await cb.answer("Доработка доступна после «Залито»", show_alert=True)
+            await cb.answer("Доработка доступна после «Залито на тест»", show_alert=True)
             return
         await start_rework(cb, conn, "feature", feature["id"])
         return
@@ -858,7 +858,7 @@ async def on_status(cb: CallbackQuery, conn: asyncpg.Connection):
         return
     if action == "rework":
         if bug["status"] != "shipped":
-            await cb.answer("Доработка доступна после «Залито»", show_alert=True)
+            await cb.answer("Доработка доступна после «Залито на тест»", show_alert=True)
             return
         await start_rework(cb, conn, "bug", bug["id"])
         return
@@ -922,7 +922,7 @@ async def on_ship_from_tested(cb: CallbackQuery, conn: asyncpg.Connection):
     label = "Баг" if kind == "bug" else "Функционал"
     try:
         await cb.message.edit_text(
-            f"🚀 <b>Залито: {label.lower()} #{item['id']}</b>\n{html.escape(item['title'])}\n"
+            f"🚀 <b>Залито на тест: {label.lower()} #{item['id']}</b>\n{html.escape(item['title'])}\n"
             f'<a href="{source_link(item)}">Открыть исходное сообщение</a>',
             reply_markup=None,
         )
@@ -940,7 +940,7 @@ async def on_ship_from_tested(cb: CallbackQuery, conn: asyncpg.Connection):
             await cb.bot.edit_message_text(text, chat_id=item["chat_id"], message_id=item["bot_msg_id"], reply_markup=markup)
         except TelegramBadRequest:
             pass
-    await cb.answer("🚀 Залито")
+    await cb.answer("🚀 Залито на тест")
 
 
 @dp.callback_query(F.data.startswith("prio:"))

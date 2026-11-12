@@ -823,7 +823,7 @@ async def try_delete_reason(message: Message, conn: asyncpg.Connection) -> bool:
 @dp.message(
     F.chat.id == GROUP_ID,
     F.message_thread_id == BUGS_THREAD_ID,
-    F.text | F.photo | F.document,
+    F.text | F.photo | F.document | F.video,
 )
 async def on_new_bug(message: Message, conn: asyncpg.Connection):
     if message.text and message.text.startswith("/"):
@@ -845,7 +845,10 @@ async def on_new_bug(message: Message, conn: asyncpg.Connection):
     await conn.execute("DELETE FROM pending_bug WHERE user_id = $1", message.from_user.id)
 
     raw = (message.text or message.caption or "").strip()
-    title = raw.splitlines()[0][:120] if raw else "Скриншот без описания"
+    if raw:
+        title = raw.splitlines()[0][:120]
+    else:
+        title = "Видео без описания" if message.video else "Скриншот без описания"
     await ask_priority(message, conn, "bug", title, pending["prompt_msg_id"], pending["button_msg_id"])
 
 

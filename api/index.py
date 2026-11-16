@@ -337,7 +337,8 @@ async def start_rework(cb: CallbackQuery, conn: asyncpg.Connection, kind: str, i
 
 async def try_rework_reason(message: Message, conn: asyncpg.Connection) -> bool:
     # если бот ждёт причину доработки от этого пользователя, текст — это причина
-    text = message.text
+    # причиной может быть текст или подпись к фото/видео
+    text = message.text or message.caption
     if not text or text.startswith("/"):
         return False
     pending = await conn.fetchrow("SELECT * FROM pending_rework WHERE user_id = $1", message.from_user.id)
